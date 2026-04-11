@@ -1,15 +1,23 @@
 """Training system — isolated arenas where robot brains evolve.
 
 Each player has 3 training arenas (one per robot design).
-Each arena runs its own population of brains through generations:
+Each arena runs in its own subprocess via multiprocessing:
   1. Spawn students + sparring partners
   2. Simulate for N ticks
   3. Evaluate fitness, evolve, repeat
+  4. Periodically send snapshots back to the main process for rendering
+
+The main process holds lightweight proxy objects that duck-type match
+the TrainingArena interface so the renderer works unchanged.
 """
 
 from __future__ import annotations
 
 import math
+import time
+import multiprocessing as mp
+from dataclasses import dataclass, field
+
 import numpy as np
 
 from brain import Brain
@@ -123,6 +131,10 @@ DEFAULT_FITNESS_WEIGHTS = {
     'damage_taken': -5.0,
 }
 
+
+# ---------------------------------------------------------------------------
+# TrainingArena — the actual simulation (runs inside worker processes)
+# ---------------------------------------------------------------------------
 
 class TrainingArena:
     """An isolated arena where one robot design evolves."""
@@ -344,31 +356,290 @@ class TrainingArena:
         }
 
 
+# ---------------------------------------------------------------------------
+# Multiprocessing: worker function + snapshot packing
+# ---------------------------------------------------------------------------
+
+# Minimum interval between render snapshots sent to main process (seconds).
+# Generation-end snapshots (with best brain) are always sent immediately.
+_SNAPSHOT_MIN_INTERVAL = 0.03  # ~30fps worth of render data
+
+
+def _pack_robots(arena: TrainingArena) -> list[tuple]:
+    """Pack robot state into picklable tuples."""
+    result = []
+    for r in arena.students + arena.sparring:
+        blocks = [(b.grid_x, b.grid_y, b.block_type.value, b.alive, b.hp, b.max_hp)
+                  for b in r.blocks]
+        result.append((r.pos[0], r.pos[1], r.angle, r.team, r.alive, blocks))
+    return result
+
+
+def _pack_bullets(arena: TrainingArena) -> list[tuple]:
+    """Pack bullet state into picklable tuples."""
+    return [(b.pos[0], b.pos[1], b.team) for b in arena.bullets if b.alive]
+
+
+def _arena_worker(blueprint_dict: dict, config: dict, conn: mp.connection.Connection):
+    """Training arena worker — runs in a subprocess.
+
+    Ticks the arena as fast as possible and sends snapshots back to the
+    main process through ``conn`` (a multiprocessing Pipe endpoint).
+
+    Commands from main process (received via conn):
+        'stop'   — exit the worker loop
+        'pause'  — pause simulation
+        'resume' — resume simulation
+    """
+    import traceback
+    try:
+        blueprint = RobotBlueprint.from_dict(blueprint_dict)
+        arena = TrainingArena(config['player_id'], config['slot_index'], blueprint)
+
+        last_gen = -1
+        last_snapshot_time = 0.0
+
+        while True:
+            # Check for commands (non-blocking)
+            while conn.poll():
+                cmd = conn.recv()
+                if cmd == 'stop':
+                    conn.close()
+                    return
+                elif cmd == 'pause':
+                    arena.paused = True
+                elif cmd == 'resume':
+                    arena.paused = False
+
+            # Run one tick
+            arena.tick()
+
+            # Decide whether to send a snapshot
+            now = time.monotonic()
+            gen_changed = arena.generation != last_gen
+            render_due = (now - last_snapshot_time) >= _SNAPSHOT_MIN_INTERVAL
+
+            if gen_changed or render_due:
+                snapshot = {
+                    'stats': arena.get_stats(),
+                    'robots': _pack_robots(arena),
+                    'bullets': _pack_bullets(arena),
+                }
+                if gen_changed:
+                    last_gen = arena.generation
+                    if arena.best_brain is not None:
+                        snapshot['best_brain'] = {
+                            'weights': arena.best_brain.get_flat_weights(),
+                            'input_size': arena.best_brain.input_size,
+                            'hidden_size': arena.best_brain.hidden_size,
+                            'output_size': arena.best_brain.output_size,
+                        }
+                try:
+                    conn.send(snapshot)
+                except (BrokenPipeError, OSError):
+                    return  # main process closed the connection
+                last_snapshot_time = now
+    except Exception:
+        traceback.print_exc()
+        try:
+            conn.send({'error': traceback.format_exc()})
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Lightweight render proxy objects (duck-type compatible with Robot/Bullet/Block)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _RenderBlock:
+    """Minimal block for rendering — matches the attrs the renderer reads."""
+    grid_x: int
+    grid_y: int
+    block_type: BlockType
+    alive: bool
+    hp: float = 1.0
+    max_hp: float = 1.0
+
+
+@dataclass
+class _RenderRobot:
+    """Minimal robot for rendering — matches the attrs the renderer reads."""
+    pos: np.ndarray
+    angle: float
+    team: int
+    alive: bool
+    blocks: list  # list[_RenderBlock]
+
+
+@dataclass
+class _RenderBullet:
+    """Minimal bullet for rendering — matches the attrs the renderer reads."""
+    pos: np.ndarray
+    team: int
+    alive: bool = True
+
+
+# ---------------------------------------------------------------------------
+# TrainingArenaProxy — main-process stand-in for a worker arena
+# ---------------------------------------------------------------------------
+
+class TrainingArenaProxy:
+    """Receives snapshots from a worker process and exposes the same interface
+    as TrainingArena so the renderer works unchanged."""
+
+    def __init__(self, player_id: int, slot_index: int,
+                 blueprint: RobotBlueprint, conn: mp.connection.Connection):
+        self.player_id = player_id
+        self.slot_index = slot_index
+        self.blueprint = blueprint
+        self.width = settings.TRAINING_ARENA_WIDTH
+        self.height = settings.TRAINING_ARENA_HEIGHT
+        self._conn = conn
+
+        # Cached render state
+        self._robots: list[_RenderRobot] = []
+        self._bullets: list[_RenderBullet] = []
+        self._stats: dict = {
+            'generation': 0, 'best_fitness': 0.0, 'avg_fitness': 0.0,
+            'gen_tick': 0, 'alive_students': 0, 'total_students': 0,
+            'alive_sparring': 0,
+        }
+        self._best_brain_data: dict | None = None
+
+    @property
+    def generation(self) -> int:
+        return self._stats.get('generation', 0)
+
+    @property
+    def all_robots(self) -> list[_RenderRobot]:
+        return [r for r in self._robots if r.alive]
+
+    @property
+    def bullets(self) -> list[_RenderBullet]:
+        return self._bullets
+
+    def get_stats(self) -> dict:
+        return self._stats
+
+    def get_best_brain(self) -> Brain:
+        """Reconstruct the best brain from cached worker data."""
+        if self._best_brain_data is not None:
+            d = self._best_brain_data
+            brain = Brain(d['input_size'], d['hidden_size'], d['output_size'])
+            brain.set_flat_weights(d['weights'].copy())
+            return brain
+        # Fallback: return a random brain matching the blueprint
+        return Brain(
+            self.blueprint.brain_input_size,
+            self.blueprint.hidden_size,
+            self.blueprint.brain_output_size,
+        )
+
+    def poll_updates(self):
+        """Drain all pending snapshots from the worker, keep the latest."""
+        latest = None
+        try:
+            while self._conn.poll():
+                latest = self._conn.recv()
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+        if latest is not None:
+            self._apply_snapshot(latest)
+
+    def _apply_snapshot(self, snapshot: dict):
+        self._stats = snapshot['stats']
+
+        if 'best_brain' in snapshot:
+            self._best_brain_data = snapshot['best_brain']
+
+        # Rebuild render robots
+        self._robots = []
+        for (x, y, angle, team, alive, blocks_data) in snapshot['robots']:
+            blocks = [
+                _RenderBlock(gx, gy, BlockType(bt), ba, hp, max_hp)
+                for gx, gy, bt, ba, hp, max_hp in blocks_data
+            ]
+            self._robots.append(_RenderRobot(
+                pos=np.array([x, y], dtype=np.float32),
+                angle=angle, team=team, alive=alive, blocks=blocks,
+            ))
+
+        self._bullets = []
+        for (x, y, team) in snapshot['bullets']:
+            self._bullets.append(_RenderBullet(
+                pos=np.array([x, y], dtype=np.float32),
+                team=team,
+            ))
+
+    def stop(self):
+        """Tell the worker to exit."""
+        try:
+            self._conn.send('stop')
+        except (BrokenPipeError, OSError):
+            pass
+
+
+# ---------------------------------------------------------------------------
+# TrainingManager — spawns and manages worker processes
+# ---------------------------------------------------------------------------
+
 class TrainingManager:
-    """Manages all training arenas for both players."""
+    """Manages training arenas across worker processes for both players."""
 
     def __init__(self, player_blueprints: list[list[RobotBlueprint]]):
-        self.arenas: list[list[TrainingArena]] = []
+        self.arenas: list[list[TrainingArenaProxy | None]] = []
+        self._workers: list[mp.Process] = []
+
+        # Use 'spawn' context to avoid forking pygame/SDL state into workers,
+        # which causes silent segfaults on Linux.
+        ctx = mp.get_context('spawn')
+
         for player_id in range(2):
-            player_arenas = []
+            player_arenas: list[TrainingArenaProxy | None] = []
             for slot in range(3):
                 bp = player_blueprints[player_id][slot]
                 if bp.blocks:
-                    arena = TrainingArena(player_id, slot, bp)
+                    main_conn, worker_conn = ctx.Pipe()
+                    config = {'player_id': player_id, 'slot_index': slot}
+                    p = ctx.Process(
+                        target=_arena_worker,
+                        args=(bp.to_dict(), config, worker_conn),
+                        daemon=True,
+                    )
+                    p.start()
+                    # Main process doesn't use the worker's pipe end
+                    worker_conn.close()
+
+                    proxy = TrainingArenaProxy(player_id, slot, bp, main_conn)
+                    player_arenas.append(proxy)
+                    self._workers.append(p)
                 else:
-                    arena = None
-                player_arenas.append(arena)
+                    player_arenas.append(None)
             self.arenas.append(player_arenas)
 
     def tick(self, ticks_per_frame: int = None):
-        """Tick all arenas. Multiple ticks per frame for faster training."""
-        if ticks_per_frame is None:
-            ticks_per_frame = settings.TRAINING_TICKS_PER_FRAME
-        for _ in range(ticks_per_frame):
-            for player_arenas in self.arenas:
-                for arena in player_arenas:
-                    if arena is not None:
-                        arena.tick()
+        """Poll all workers for snapshot updates.
 
-    def get_arena(self, player_id: int, slot: int) -> TrainingArena | None:
+        Workers run independently at full speed — this just collects their
+        latest state for rendering and game logic.  The ``ticks_per_frame``
+        argument is accepted for API compatibility but ignored.
+        """
+        for player_arenas in self.arenas:
+            for arena in player_arenas:
+                if arena is not None:
+                    arena.poll_updates()
+
+    def get_arena(self, player_id: int, slot: int) -> TrainingArenaProxy | None:
         return self.arenas[player_id][slot]
+
+    def stop(self):
+        """Shut down all worker processes."""
+        for player_arenas in self.arenas:
+            for arena in player_arenas:
+                if arena is not None:
+                    arena.stop()
+        for p in self._workers:
+            p.join(timeout=2)
+            if p.is_alive():
+                p.terminate()

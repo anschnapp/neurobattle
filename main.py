@@ -57,27 +57,30 @@ class Game:
 
     def run(self):
         running = True
-        while running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+        try:
+            while running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
                         running = False
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            running = False
 
-            if self.phase == Phase.ASSEMBLY:
-                self._update_assembly()
-                self.assembly.draw()
-            else:
-                if self.winner is None:
-                    self._update_match()
-                self._draw_match()
+                if self.phase == Phase.ASSEMBLY:
+                    self._update_assembly()
+                    self.assembly.draw()
+                else:
+                    if self.winner is None:
+                        self._update_match()
+                    self._draw_match()
 
-            pygame.display.flip()
-            self.clock.tick(settings.FPS)
-
-        pygame.quit()
-        sys.exit()
+                pygame.display.flip()
+                self.clock.tick(settings.FPS)
+        finally:
+            if self.training is not None:
+                self.training.stop()
+            pygame.quit()
+            sys.exit()
 
     # --- assembly phase ----------------------------------------------------
 

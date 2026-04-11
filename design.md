@@ -31,11 +31,11 @@ Once both players are ready, the match begins. Training arenas run continuously.
 
 ## Screen Layout
 
-- **Top:** Player 1's 3 training arenas
+- **Top:** Player 1's training zone (one long strip)
 - **Center:** Battlefield with bases on left and right
-- **Bottom:** Player 2's 3 training arenas
+- **Bottom:** Player 2's training zone (one long strip)
 
-Training arenas are rendered at the same scale as the battlefield. Each arena has slider controls for configuration (fitness weights, sparring partner counts, etc.).
+Each player has a single training zone spanning the full width of the screen. The zone trains one robot design at a time — the player selects which of their 3 designs to train and can hot-swap at any time. The zone has slider controls for configuration (fitness weights, sparring partner counts, etc.) and an indicator showing which design is currently training and its generation count.
 
 ## Robot Design (Modular)
 
@@ -67,34 +67,53 @@ Sensors are physical modules that determine what the robot's brain receives as i
 ## Neural Network Architecture
 
 - **Type:** small feedforward network (not recurrent, not deep learning)
-- **Inputs:** sensor readings (float values, count depends on sensor modules)
-- **Hidden layers:** 1-2 layers, size chosen by player (e.g. 8, 16, 32 neurons)
-- **Outputs:** actions (move direction x/y, shoot yes/no, aim direction — ~4-6 floats)
+- **Inputs:** auto-determined by sensor modules on the robot (float values)
+- **Hidden layers:** 1-2 layers, size chosen by player during assembly (e.g. 8, 16, 32 neurons)
+- **Outputs:** auto-determined by engine/weapon modules on the robot (move direction x/y, shoot yes/no, aim direction — ~4-6 floats)
 - **Activation:** tanh (squashes values to -1..1)
 - **Weights/biases:** plain NumPy arrays of floats — this IS the brain
 - **Forward pass:** `hidden = tanh(inputs @ weights1 + bias1)` then `outputs = tanh(hidden @ weights2 + bias2)`
 - **No backpropagation.** Training is purely evolutionary (genetic algorithm).
 
+### Network Configuration (During Assembly)
+
+The hidden layer size is locked during robot assembly — it cannot be changed after training begins, since changing the architecture invalidates all evolved weights.
+
+The assembly screen shows a **live network visualization** for each robot design:
+- **Input nodes** (left) — auto-determined by sensor modules. Adding/removing sensors updates these in real time.
+- **Hidden layer nodes** (center) — player chooses the count (e.g. 8, 16, 32). A slider or cycle control adjusts this.
+- **Output nodes** (right) — auto-determined by engine/weapon modules. Adding/removing actuators updates these in real time.
+- **Connections** — lines drawn between layers, showing density. A compact 4-8-3 network looks clean and manageable. A sprawling 12-32-6 network looks visually dense — communicating "harder to train" through the visualization itself.
+
+This makes the cost of complexity tangible before the match starts.
+
 ## Training System
 
-Training runs continuously during the match and is free (no resource cost).
+Training is free (no resource cost). Each player has a **single training zone** (one long strip) that trains one robot design at a time.
 
-### Training Arenas
+### Training Zone Lifecycle
 
-- Each player has **3 training arenas** (slots), one per robot design.
-- Training arenas are isolated — hard borders, no connection to the battlefield or other arenas.
-- Each arena has slider controls for configuring fitness function weights and sparring partner counts.
+1. **Match start: 15-second setup period.** The training zone is inactive. The player uses this time to select which design to train, configure fitness weights, and set up sparring partners.
+2. **After 15 seconds: training activates** and runs continuously for the rest of the match.
+3. **Hot-swapping:** The player can switch which design is being trained or adjust parameters at any time. Switching designs preserves the previous design's evolved weights — training resumes from where it left off when that design is selected again.
+
+### Training Zone
+
+- The zone is isolated — hard borders, no connection to the battlefield.
+- Spans the full width of the screen, giving more space than the old per-design arenas.
+- Shows an indicator of which design is currently training and its generation count.
+- Has slider controls for configuring fitness function weights and sparring partner counts.
 
 ### Training Flow
 
-1. **10 "student" robots** of the design being trained are spawned in the arena.
-2. The player seeds the arena with **sparring partners**:
+1. **10 "student" robots** of the currently selected design are spawned in the zone.
+2. The player seeds the zone with **sparring partners**:
    - Own robots assigned as **friend** or **enemy** (any of the player's 3 designs)
    - Scanned enemy robots as enemies (locked to the generation that was scanned)
    - Player chooses how many sparring partners to include
 3. The round plays out until a time limit or all robots are dead.
 4. The best-performing students survive, are mutated, and form the next generation.
-5. Repeat with the sparring partner count the player has configured.
+5. Repeat.
 
 ### Fitness Function
 
@@ -203,7 +222,8 @@ Input is read via `pygame.key.get_pressed()` (polling), not key events. This avo
 - **Primary:** place block (if empty) or cycle type (Armor → Engine → Weapon → Sensor → Scanner → Gatherer → remove)
 - **Secondary:** cycle facing direction on directional blocks
 - **Cursor above grid → slot tabs:** switch between 3 robot designs
-- **Cursor below grid → READY button:** lock in designs (requires all 3 to have blocks)
+- **Cursor below grid → network size control:** cycle hidden layer neuron count for the current design
+- **Below network control → READY button:** lock in designs (requires all 3 to have blocks)
 
 ### Persistence
 
@@ -221,10 +241,15 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports
 - `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs)
 - `main.py` — game loop with ASSEMBLY → MATCH phase state machine
-- `training.py` — training arenas (isolated sim per design), fitness evaluation (hit_enemy/survival/damage_taken), evolution loop, 3 ticks per frame, TrainingManager for all 6 arenas, rendered in top/bottom strips with cached surfaces. Uses lightweight pure-Python physics (no NumPy overhead for small entity counts).
+- `training.py` — training arenas (isolated sim per design), fitness evaluation (hit_enemy/survival/damage_taken), evolution loop, rendered in top/bottom strips with cached surfaces. Uses lightweight pure-Python physics (no NumPy overhead for small entity counts). Each arena runs in its own subprocess via `multiprocessing` (spawn context to avoid pygame/SDL fork issues). Workers tick at full CPU speed and send render snapshots + best brains back through Pipes. Main process holds lightweight proxy objects (duck-type compatible with the renderer).
+
+### Needs Rework
+- **Training system** — restructure from 3 arenas per player to 1 training zone per player. Wider zone (full screen width), single active design with hot-swap, 15s setup delay at match start, generation count indicator.
+- **Assembly screen** — add hidden layer size selector per design, add live network visualization (inputs/hidden/outputs with connection lines), auto-derive input/output counts from placed modules.
+- **Performance** — ~~parallelize training via multiprocessing~~ (done). Profile remaining bottlenecks (battlefield physics, sensor calculations at scale).
 
 ### Next Up
-- **Training UI polish** — fitness weight sliders, sparring partner config, training speed controls
+- **Training UI polish** — fitness weight sliders, sparring partner config within the single zone
 - **Resource system** — passive income, recycling, battlefield drops, auto-spawn
 - **Battlefield & combat** — autonomous fighting, wall breach, win condition polish
 - **Scanning & arms race** — scan enemies, use as training dummies
@@ -236,6 +261,12 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - **NumPy** — neural net forward pass, genetic algorithm / evolution math (keeps the hot path in C)
 - **dataclasses** — clean modular robot composition (body, weapon, engine, scanner, brain)
 - Architecture: straightforward OOP / dataclass composition, no heavy framework
+
+### Performance Strategy
+
+- **Parallelization (implemented):** Each training arena runs in its own subprocess via `multiprocessing` with `spawn` context (required to avoid forking pygame/SDL state). Workers tick at full CPU speed independently. Communication via `Pipe`: workers send render snapshots (~30fps) and best brain weights (each generation); main process sends commands (stop/pause/resume). Proxy objects in the main process duck-type match `TrainingArena` so the renderer works unchanged.
+- **Profile-first:** Identify actual bottlenecks before optimizing. Likely candidates: battlefield sensor calculations, collision detection at scale.
+- **Single zone benefit:** One zone per player instead of three means fewer concurrent simulations to run, directly reducing CPU load.
 
 ### Why Python
 
