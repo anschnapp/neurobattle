@@ -188,6 +188,47 @@ During a match, the player's focus is on:
 
 The battlefield itself is autonomous. The player is an engineer and evolutionary biologist, not a soldier.
 
+## Controls
+
+Simple two-player keybindings, no configuration needed:
+
+- **Player 1:** WASD (navigate) + E (primary action) + Q (secondary action)
+- **Player 2:** Arrow keys (navigate) + Right Ctrl (primary action) + Right Shift (secondary action)
+
+Input is read via `pygame.key.get_pressed()` (polling), not key events. This avoids modifier interference — e.g., Right Shift is just a button, not a modifier that changes other key behavior.
+
+### Assembly Controls
+
+- **Move:** navigate cursor on 9x9 grid
+- **Primary:** place block (if empty) or cycle type (Armor → Engine → Weapon → Sensor → Scanner → Gatherer → remove)
+- **Secondary:** cycle facing direction on directional blocks
+- **Cursor above grid → slot tabs:** switch between 3 robot designs
+- **Cursor below grid → READY button:** lock in designs (requires all 3 to have blocks)
+
+### Persistence
+
+Last designs are saved to `last_designs.json` on match start and auto-loaded on next launch.
+
+## Implementation Status
+
+### Done
+- `settings.py` — constants, colors, keybindings, screen layout (1400x1000: top 200px P1 training / center 600px battlefield / bottom 200px P2 training)
+- `brain.py` — feedforward neural net (NumPy), save/load, copy
+- `evolution.py` — genetic algorithm: Population with fitness, selection, mutation
+- `modules.py` — block-based robot system (PLAIN/ENGINE/WEAPON/SENSOR/SCANNER/GATHERER), blueprints, serialize/deserialize
+- `entities.py` — Robot (block-based), Bullet, Base, Turret
+- `physics.py` — vectorized NumPy: batch sensors, collisions (robot-robot, bullet-robot, bullet-base)
+- `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports
+- `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs)
+- `main.py` — game loop with ASSEMBLY → MATCH phase state machine
+- `training.py` — training arenas (isolated sim per design), fitness evaluation (hit_enemy/survival/damage_taken), evolution loop, 3 ticks per frame, TrainingManager for all 6 arenas, rendered in top/bottom strips with cached surfaces. Uses lightweight pure-Python physics (no NumPy overhead for small entity counts).
+
+### Next Up
+- **Training UI polish** — fitness weight sliders, sparring partner config, training speed controls
+- **Resource system** — passive income, recycling, battlefield drops, auto-spawn
+- **Battlefield & combat** — autonomous fighting, wall breach, win condition polish
+- **Scanning & arms race** — scan enemies, use as training dummies
+
 ## Tech Stack
 
 - **Python** — main language

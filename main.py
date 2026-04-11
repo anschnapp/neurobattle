@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import sys
+from enum import Enum, auto
+
 import numpy as np
 import pygame
 
@@ -17,6 +19,13 @@ from physics import (
     batch_bullet_base_collisions, batch_sensor_readings,
 )
 from renderer import Renderer
+from assembly import AssemblyScreen
+from training import TrainingManager
+
+
+class Phase(Enum):
+    ASSEMBLY = auto()
+    MATCH = auto()
 
 
 class Game:
@@ -28,51 +37,23 @@ class Game:
         pygame.display.set_caption("Robot Evolution")
         self.clock = pygame.time.Clock()
         self.renderer = Renderer(self.screen)
+
+        # Start in assembly phase
+        self.phase = Phase.ASSEMBLY
+        self.assembly = AssemblyScreen(self.screen)
+        self.assembly_done_timer = 0  # brief delay before starting match
+
+        # Match state (initialized on transition)
         self.tick = 0
         self.winner: int | None = None
-
-        self.bases = [Base.create(0), Base.create(1)]
+        self.bases: list[Base] = []
         self.robots: list[Robot] = []
         self.bullets: list[Bullet] = []
-
-        self._spawn_demo_robots()
-
-    def _spawn_demo_robots(self):
-        """Spawn robots with different blueprints for visual testing."""
-        blueprints = [
-            RobotBlueprint.default_fighter(),
-            RobotBlueprint.default_tank(),
-            RobotBlueprint.minimal_scout(),
-        ]
-
-        for team in (0, 1):
-            base_pos = settings.BASE_POSITIONS[team]
-            for i in range(5):
-                bp = blueprints[i % len(blueprints)]
-                brain = Brain(
-                    input_size=bp.brain_input_size,
-                    hidden_size=bp.hidden_size,
-                    output_size=bp.brain_output_size,
-                )
-                # Scatter around base, outside the wall
-                angle_offset = (2 * math.pi * i) / 5
-                spawn_dist = settings.BASE_RADIUS + 50
-                spawn_pos = base_pos + np.array([
-                    math.cos(angle_offset) * spawn_dist,
-                    math.sin(angle_offset) * spawn_dist,
-                ], dtype=np.float32)
-
-                # Face toward enemy base
-                face_angle = 0.0 if team == 0 else math.pi
-
-                robot = Robot(
-                    pos=spawn_pos,
-                    angle=face_angle,
-                    team=team,
-                    blueprint=bp,
-                    brain=brain,
-                )
-                self.robots.append(robot)
+        self.player_blueprints: list[list[RobotBlueprint]] = [[], []]
+        self.training: TrainingManager | None = None
+        self.frame_count = 0
+        # Cached surfaces for training strips (avoid redrawing every frame)
+        self.training_surfaces: list[pygame.Surface | None] = [None, None]
 
     def run(self):
         running = True
@@ -83,30 +64,79 @@ class Game:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         running = False
-                    elif event.key == pygame.K_r:
-                        self._restart()
-                    elif event.key == pygame.K_SPACE:
-                        self._spawn_demo_robots()
 
-            if self.winner is None:
-                self._update()
+            if self.phase == Phase.ASSEMBLY:
+                self._update_assembly()
+                self.assembly.draw()
+            else:
+                if self.winner is None:
+                    self._update_match()
+                self._draw_match()
 
-            self._draw()
+            pygame.display.flip()
             self.clock.tick(settings.FPS)
 
         pygame.quit()
         sys.exit()
 
-    def _restart(self):
+    # --- assembly phase ----------------------------------------------------
+
+    def _update_assembly(self):
+        self.assembly.update()
+
+        if self.assembly.both_ready:
+            self.assembly_done_timer += 1
+            if self.assembly_done_timer >= settings.FPS:  # 1 second delay
+                self._start_match()
+        else:
+            self.assembly_done_timer = 0
+
+    def _start_match(self):
+        self.phase = Phase.MATCH
+        self.player_blueprints = self.assembly.get_blueprints()
         self.tick = 0
         self.winner = None
         self.bases = [Base.create(0), Base.create(1)]
-        self.robots.clear()
-        self.bullets.clear()
-        self._spawn_demo_robots()
+        self.robots = []
+        self.bullets = []
+        self._spawn_initial_robots()
 
-    def _update(self):
+        # Start training
+        self.training = TrainingManager(self.player_blueprints)
+
+    def _spawn_initial_robots(self):
+        """Spawn one robot per blueprint for each player."""
+        for team in (0, 1):
+            base_pos = settings.BASE_POSITIONS[team]
+            bps = self.player_blueprints[team]
+            for i, bp in enumerate(bps):
+                if not bp.blocks:
+                    continue
+                brain = Brain(
+                    input_size=bp.brain_input_size,
+                    hidden_size=bp.hidden_size,
+                    output_size=bp.brain_output_size,
+                )
+                angle_offset = (2 * math.pi * i) / max(len(bps), 1)
+                spawn_dist = settings.BASE_RADIUS + 50
+                spawn_pos = base_pos + np.array([
+                    math.cos(angle_offset) * spawn_dist,
+                    math.sin(angle_offset) * spawn_dist,
+                ], dtype=np.float32)
+                face_angle = 0.0 if team == 0 else math.pi
+                self.robots.append(Robot(
+                    pos=spawn_pos, angle=face_angle, team=team,
+                    blueprint=bp, brain=brain,
+                ))
+
+    # --- match phase -------------------------------------------------------
+
+    def _update_match(self):
         self.tick += 1
+
+        # Tick training arenas (runs multiple ticks per frame)
+        if self.training is not None:
+            self.training.tick()
 
         # Robot AI: batch sensor readings, then think
         sensor_map = batch_sensor_readings(self.robots, self.bases)
@@ -143,7 +173,7 @@ class Game:
         # Vectorized robot-robot collisions
         batch_robot_collisions(self.robots)
 
-        # Robot-wall collisions (few bases, loop is fine)
+        # Robot-wall collisions
         for robot in self.robots:
             if not robot.alive:
                 continue
@@ -155,7 +185,7 @@ class Game:
         hit_bullet_indices = set()
         for bi, ri, bpos in hits:
             if bi in hit_bullet_indices:
-                continue  # bullet already consumed
+                continue
             self.robots[ri].take_damage_at(bpos, self.bullets[bi].damage)
             self.bullets[bi].alive = False
             hit_bullet_indices.add(bi)
@@ -179,7 +209,7 @@ class Game:
         self.robots = [r for r in self.robots if r.alive]
         self.bullets = [b for b in self.bullets if b.alive]
 
-    def _draw(self):
+    def _draw_match(self):
         self.renderer.clear()
         self.renderer.draw_arena_border()
 
@@ -197,7 +227,29 @@ class Game:
         if self.winner is not None:
             self.renderer.draw_game_over(self.winner)
 
-        pygame.display.flip()
+        # Draw training arenas (cached, only redrawn periodically)
+        if self.training is not None:
+            self.frame_count += 1
+            redraw = (self.frame_count % settings.TRAINING_RENDER_INTERVAL == 0)
+            for player_id in range(2):
+                if redraw or self.training_surfaces[player_id] is None:
+                    surf = pygame.Surface(
+                        (settings.SCREEN_WIDTH, settings.TRAINING_STRIP_HEIGHT)
+                    )
+                    surf.fill(settings.DARK_GRAY)
+                    # Temporarily swap screen to draw into surface
+                    old_screen = self.renderer.screen
+                    self.renderer.screen = surf
+                    strip_y = 0  # draw at top of surface
+                    self.renderer.draw_training_strip(
+                        player_id, self.training.arenas[player_id],
+                        override_y=0,
+                    )
+                    self.renderer.screen = old_screen
+                    self.training_surfaces[player_id] = surf
+                # Blit cached surface
+                dest_y = 0 if player_id == 0 else (settings.SCREEN_HEIGHT - settings.TRAINING_STRIP_HEIGHT)
+                self.screen.blit(self.training_surfaces[player_id], (0, dest_y))
 
 
 if __name__ == "__main__":

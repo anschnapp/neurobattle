@@ -4,8 +4,14 @@ import numpy as np
 
 # --- Display ---
 SCREEN_WIDTH = 1400
-SCREEN_HEIGHT = 900
+SCREEN_HEIGHT = 1000
 FPS = 60
+
+# --- Screen layout (top training / center battlefield / bottom training) ---
+TRAINING_STRIP_HEIGHT = 200
+BATTLEFIELD_Y = TRAINING_STRIP_HEIGHT
+BATTLEFIELD_HEIGHT = SCREEN_HEIGHT - 2 * TRAINING_STRIP_HEIGHT  # 600
+BATTLEFIELD_WIDTH = SCREEN_WIDTH
 
 # --- Colors ---
 BLACK = (0, 0, 0)
@@ -27,8 +33,8 @@ TEAM_COLORS = {
 }
 
 # --- Arena / Battlefield ---
-ARENA_WIDTH = 1400
-ARENA_HEIGHT = 900
+ARENA_WIDTH = BATTLEFIELD_WIDTH
+ARENA_HEIGHT = BATTLEFIELD_HEIGHT
 
 # --- Base ---
 BASE_RADIUS = 80
@@ -38,8 +44,8 @@ COMMANDER_RADIUS = 6
 
 # Base positions (center of each base circle)
 BASE_POSITIONS = {
-    0: np.array([120.0, ARENA_HEIGHT / 2]),   # Player 1 - left
-    1: np.array([ARENA_WIDTH - 120.0, ARENA_HEIGHT / 2]),  # Player 2 - right
+    0: np.array([120.0, ARENA_HEIGHT / 2], dtype=np.float32),   # Player 1 - left
+    1: np.array([ARENA_WIDTH - 120.0, ARENA_HEIGHT / 2], dtype=np.float32),  # Player 2 - right
 }
 
 # --- Robot defaults ---
@@ -77,8 +83,33 @@ MUTATION_DECAY = 0.995  # rate decreases slightly each generation
 
 # --- Training ---
 TRAINING_TICKS_PER_GENERATION = 300  # how many sim ticks per generation eval
-TRAINING_ARENA_WIDTH = 400
-TRAINING_ARENA_HEIGHT = 300
+TRAINING_ARENA_WIDTH = 350
+TRAINING_ARENA_HEIGHT = 250
+TRAINING_STUDENT_COUNT = 10
+TRAINING_TICKS_PER_FRAME = 3  # training runs faster than real-time
+TRAINING_RENDER_INTERVAL = 3  # only redraw training strips every N frames
 
 # --- Auto-fork ---
 AUTO_FORK_COOLDOWN = 300  # ticks between auto-forks
+
+# --- Controls ---
+# Input is read via pygame.key.get_pressed() (polling) to avoid modifier interference.
+import pygame
+PLAYER_KEYS = [
+    {  # Player 1
+        'up': pygame.K_w,
+        'down': pygame.K_s,
+        'left': pygame.K_a,
+        'right': pygame.K_d,
+        'primary': pygame.K_e,
+        'secondary': pygame.K_q,
+    },
+    {  # Player 2
+        'up': pygame.K_UP,
+        'down': pygame.K_DOWN,
+        'left': pygame.K_LEFT,
+        'right': pygame.K_RIGHT,
+        'primary': pygame.K_RCTRL,
+        'secondary': pygame.K_RSHIFT,
+    },
+]

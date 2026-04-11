@@ -1,0 +1,450 @@
+{
+  "player_0": [
+    {
+      "hidden_size": 16,
+      "blocks": [
+        {
+          "grid_x": 0,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -1,
+          "type": "ENGINE",
+          "direction": "UP"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": -1,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 1,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 2,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 2,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 3,
+          "type": "ENGINE",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 3,
+          "type": "ENGINE",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": 3,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        }
+      ]
+    },
+    {
+      "hidden_size": 16,
+      "blocks": [
+        {
+          "grid_x": 1,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 0,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 1,
+          "type": "ENGINE",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 1,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -1,
+          "type": "ENGINE",
+          "direction": "UP"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 1,
+          "type": "WEAPON",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "LEFT"
+        }
+      ]
+    },
+    {
+      "hidden_size": 16,
+      "blocks": [
+        {
+          "grid_x": -1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 3,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": -3,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -2,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        }
+      ]
+    }
+  ],
+  "player_1": [
+    {
+      "hidden_size": 16,
+      "blocks": [
+        {
+          "grid_x": 0,
+          "grid_y": 0,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 1,
+          "type": "WEAPON",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 1,
+          "type": "WEAPON",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -1,
+          "type": "ENGINE",
+          "direction": "UP"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 1,
+          "type": "ENGINE",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "UP"
+        }
+      ]
+    },
+    {
+      "hidden_size": 16,
+      "blocks": [
+        {
+          "grid_x": 0,
+          "grid_y": -1,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 0,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 1,
+          "type": "WEAPON",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 1,
+          "type": "WEAPON",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 0,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -1,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": -2,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -2,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -2,
+          "type": "WEAPON",
+          "direction": "UP"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -2,
+          "type": "WEAPON",
+          "direction": "UP"
+        },
+        {
+          "grid_x": -2,
+          "grid_y": -2,
+          "type": "ENGINE",
+          "direction": "UP"
+        },
+        {
+          "grid_x": -2,
+          "grid_y": 1,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 1,
+          "type": "ENGINE",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": -2,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        }
+      ]
+    },
+    {
+      "hidden_size": 16,
+      "blocks": [
+        {
+          "grid_x": 0,
+          "grid_y": 3,
+          "type": "ENGINE",
+          "direction": "DOWN"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 2,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 1,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -1,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -2,
+          "type": "PLAIN",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 1,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": 0,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": -1,
+          "type": "WEAPON",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -3,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -2,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": -1,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 1,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 2,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": -1,
+          "grid_y": 3,
+          "type": "ENGINE",
+          "direction": "LEFT"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": -3,
+          "type": "ENGINE",
+          "direction": "UP"
+        },
+        {
+          "grid_x": 0,
+          "grid_y": 0,
+          "type": "ENGINE",
+          "direction": "RIGHT"
+        }
+      ]
+    }
+  ]
+}

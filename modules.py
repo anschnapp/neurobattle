@@ -18,6 +18,7 @@ class BlockType(Enum):
     WEAPON = auto()    # shoots in its facing direction
     SENSOR = auto()    # detects entities in its facing direction
     SCANNER = auto()   # scans enemies in its facing direction
+    GATHERER = auto()  # magnetically collects battlefield resource drops
 
 
 class Direction(Enum):
@@ -144,6 +145,34 @@ class RobotBlueprint:
         if total == 0:
             return 1  # dummy output
         return total
+
+    def to_dict(self) -> dict:
+        """Serialize blueprint to a plain dict (for JSON save)."""
+        return {
+            "hidden_size": self.hidden_size,
+            "blocks": [
+                {
+                    "grid_x": b.grid_x,
+                    "grid_y": b.grid_y,
+                    "type": b.block_type.name,
+                    "direction": b.direction.name,
+                }
+                for b in self.blocks
+            ],
+        }
+
+    @staticmethod
+    def from_dict(data: dict) -> RobotBlueprint:
+        """Deserialize blueprint from a plain dict."""
+        bp = RobotBlueprint(hidden_size=data.get("hidden_size", 16))
+        for bd in data.get("blocks", []):
+            bp.add_block(
+                grid_x=bd["grid_x"],
+                grid_y=bd["grid_y"],
+                block_type=BlockType[bd["type"]],
+                direction=Direction[bd["direction"]],
+            )
+        return bp
 
     def copy_blocks(self) -> list[Block]:
         """Deep copy all blocks (for spawning a new robot from this blueprint)."""
