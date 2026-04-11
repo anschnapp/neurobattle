@@ -79,11 +79,13 @@ Sensors are physical modules that determine what the robot's brain receives as i
 
 The hidden layer size is locked during robot assembly — it cannot be changed after training begins, since changing the architecture invalidates all evolved weights.
 
-The assembly screen shows a **live network visualization** for each robot design:
-- **Input nodes** (left) — auto-determined by sensor modules. Adding/removing sensors updates these in real time.
-- **Hidden layer nodes** (center) — player chooses the count (e.g. 8, 16, 32). A slider or cycle control adjusts this.
-- **Output nodes** (right) — auto-determined by engine/weapon modules. Adding/removing actuators updates these in real time.
-- **Connections** — lines drawn between layers, showing density. A compact 4-8-3 network looks clean and manageable. A sprawling 12-32-6 network looks visually dense — communicating "harder to train" through the visualization itself.
+The assembly screen shows a **live network visualization** for each robot design (implemented):
+- **Input nodes** (left, green) — auto-determined by sensor modules. Each sensor contributes 2 inputs: distance + type. Labels show sensor direction, e.g. `S(R) dist`, `S(R) type`. Updates in real time as sensors are added/removed.
+- **Hidden layer nodes** (center, blue) — player cycles through options (4, 8, 12, 16, 24, 32) using primary/secondary on the network row below the grid. A **suggested size** is shown based on `max(8, (inputs + outputs) * 1.5)`.
+- **Output nodes** (right, orange) — auto-determined by engine/weapon modules. Each engine = 1 output, each weapon = 1 output. Labels show type and direction, e.g. `E(L)`, `W(R)`.
+- **Connections** — faded lines drawn between layers, showing density. A compact 4-8-3 network looks clean. A sprawling 12-32-6 network looks visually dense — communicating "harder to train" through the visualization itself.
+- **Overflow** — layers with more than 8 nodes cap the visual display and show `+N` for remaining nodes.
+- **Param count** — total weight count displayed on the right (e.g. "156 params"), giving a concrete measure of brain complexity.
 
 This makes the cost of complexity tangible before the match starts.
 
@@ -239,13 +241,13 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - `entities.py` — Robot (block-based), Bullet, Base, Turret
 - `physics.py` — vectorized NumPy: batch sensors, collisions (robot-robot, bullet-robot, bullet-base)
 - `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports
-- `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs)
+- `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs, live network visualization with input/output labels, hidden size selector with suggestions, param count)
 - `main.py` — game loop with ASSEMBLY → MATCH phase state machine
 - `training.py` — training arenas (isolated sim per design), fitness evaluation (hit_enemy/survival/damage_taken), evolution loop, rendered in top/bottom strips with cached surfaces. Uses lightweight pure-Python physics (no NumPy overhead for small entity counts). Each arena runs in its own subprocess via `multiprocessing` (spawn context to avoid pygame/SDL fork issues). Workers tick at full CPU speed and send render snapshots + best brains back through Pipes. Main process holds lightweight proxy objects (duck-type compatible with the renderer).
 
 ### Needs Rework
 - **Training system** — restructure from 3 arenas per player to 1 training zone per player. Wider zone (full screen width), single active design with hot-swap, 15s setup delay at match start, generation count indicator.
-- **Assembly screen** — add hidden layer size selector per design, add live network visualization (inputs/hidden/outputs with connection lines), auto-derive input/output counts from placed modules.
+- ~~**Assembly screen** — add hidden layer size selector per design, add live network visualization (inputs/hidden/outputs with connection lines), auto-derive input/output counts from placed modules.~~ (done)
 - **Performance** — ~~parallelize training via multiprocessing~~ (done). Profile remaining bottlenecks (battlefield physics, sensor calculations at scale).
 
 ### Next Up
