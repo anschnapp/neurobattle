@@ -255,6 +255,19 @@ class Renderer:
                 pygame.draw.line(self.screen, settings.MID_GRAY,
                                  (panel_x, sep_y), (panel_x + panel_w - 12, sep_y), 1)
 
+            # Color-code fitness values: green for positive, red for negative
+            if row >= ui.ROW_FITNESS_START:
+                fi = row - ui.ROW_FITNESS_START
+                if fi < len(FITNESS_PARAMS):
+                    key = FITNESS_PARAMS[fi][0]
+                    fval = ui.config.fitness_weights.get(key, FITNESS_PARAMS[fi][2])
+                    if fval > 0:
+                        value_color = settings.GREEN
+                    elif fval < 0:
+                        value_color = settings.RED
+                    else:
+                        value_color = settings.MID_GRAY
+
             txt = f"{indicator} {label}:"
             self.screen.blit(self.small_font.render(txt, True, label_color), (panel_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),

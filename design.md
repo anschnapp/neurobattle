@@ -129,8 +129,11 @@ The player configures fitness by adjusting weights on predefined components. Eve
 - **Damage taken** (default -5): reward/punish per hit received
 - **Dist to enemy** (default 0): reward/punish based on how far toward the enemy side of the arena the robot is (normalized 0..1 across arena width)
 - **Collect resources** (default 0): reward/punish per resource collected
+- **Scan enemy** (default 0): reward/punish per successful scanner hit on an enemy robot (friends cannot be scanned)
 
 The mix of weights shapes what behavior evolves — aggressive, defensive, evasive, resource-focused, etc.
+
+Fitness weight values are color-coded in the UI: green for positive, red for negative, gray for zero.
 
 ### Training Opponents
 
