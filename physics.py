@@ -209,14 +209,20 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
     base_positions = np.array([b.center for b in bases], dtype=np.float32)  # (B, 2)
     base_teams = np.array([b.team for b in bases], dtype=np.int32)
 
+    # Precompute arena diagonal for radar normalization
+    arena_diag = math.sqrt(settings.SCREEN_WIDTH**2 + settings.SCREEN_HEIGHT**2)
+
     results = {}
     for ai, (orig_idx, robot) in enumerate(alive):
         sensor_blocks = [b for b in robot.blocks if b.block_type == BlockType.SENSOR]
-        if not sensor_blocks:
+        radar_blocks = [b for b in robot.blocks if b.block_type == BlockType.RADAR]
+        if not sensor_blocks and not radar_blocks:
             results[orig_idx] = np.zeros(robot.blueprint.brain_input_size, dtype=np.float32)
             continue
 
         readings = []
+
+        # --- Directional sensors ---
         for sensor in sensor_blocks:
             if not sensor.alive:
                 readings.extend([0.0, 0.0])
@@ -232,13 +238,10 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
             best_type = 0.0
 
             # Use precomputed distances for robot-robot checks
-            # Note: sensor_pos may differ slightly from robot.pos (block offset),
-            # but for perf we approximate using robot center distances
             dists = dist_matrix[ai]  # (N,) distances from this robot to all others
             in_range = dists < sensor.sensor_range
 
             if np.any(in_range):
-                # Dot product of to_other direction with sensor direction
                 dots = to_other_dir[ai, :, 0] * sensor_dir[0] + to_other_dir[ai, :, 1] * sensor_dir[1]
                 in_fov = dots >= cos_fov
                 candidates = in_range & in_fov
@@ -267,6 +270,65 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
 
             readings.append(best_dist / sensor.sensor_range)
             readings.append(best_type)
+
+        # --- Radar blocks: Nth nearest enemy + Nth nearest friend ---
+        if radar_blocks:
+            enemies = []
+            friends = []
+            dists = dist_matrix[ai]
+            for aj, (_, other) in enumerate(alive):
+                if aj == ai:
+                    continue
+                d = dists[aj]
+                if d == np.inf or d < 0.001:
+                    continue
+                dx = other.pos[0] - robot.pos[0]
+                dy = other.pos[1] - robot.pos[1]
+                angle = math.atan2(dy, dx) - robot.angle
+                angle = (angle + math.pi) % (2 * math.pi) - math.pi
+                entry = (float(d), angle / math.pi)
+                if other.team != robot.team:
+                    enemies.append(entry)
+                else:
+                    friends.append(entry)
+            enemies.sort()
+            friends.sort()
+
+            for r_idx, radar in enumerate(radar_blocks):
+                if not radar.alive:
+                    readings.extend([0.0, 0.0, 0.0, 0.0])
+                    continue
+                if r_idx < len(enemies):
+                    e_dist, e_angle = enemies[r_idx]
+                    readings.append(e_angle)
+                    readings.append(1.0 - min(e_dist / arena_diag, 1.0))
+                else:
+                    readings.extend([0.0, 0.0])
+                if r_idx < len(friends):
+                    f_dist, f_angle = friends[r_idx]
+                    readings.append(f_angle)
+                    readings.append(1.0 - min(f_dist / arena_diag, 1.0))
+                else:
+                    readings.extend([0.0, 0.0])
+
+        # --- Beacon: enemy base + friendly base (order must match training) ---
+        has_beacon = any(
+            b.block_type == BlockType.BEACON and b.alive for b in robot.blocks
+        )
+        if has_beacon:
+            # Sort: enemy base first, then friendly base
+            sorted_bases = sorted(bases, key=lambda b: b.team == robot.team)
+            for base in sorted_bases:
+                bx = base.center[0] - robot.pos[0]
+                by = base.center[1] - robot.pos[1]
+                d = math.sqrt(bx * bx + by * by)
+                if d < 0.001:
+                    readings.extend([0.0, 1.0])
+                else:
+                    angle = math.atan2(by, bx) - robot.angle
+                    angle = (angle + math.pi) % (2 * math.pi) - math.pi
+                    readings.append(angle / math.pi)
+                    readings.append(1.0 - min(d / arena_diag, 1.0))
 
         results[orig_idx] = np.array(readings, dtype=np.float32)
 

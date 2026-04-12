@@ -18,6 +18,8 @@ BLOCK_COLORS = {
     BlockType.SENSOR:   (60, 160, 220),   # blue
     BlockType.SCANNER:  (200, 180, 40),   # yellow
     BlockType.GATHERER: (180, 60, 200),   # purple
+    BlockType.RADAR:    (40, 220, 200),    # cyan
+    BlockType.BEACON:   (255, 160, 40),    # orange
 }
 
 
@@ -225,23 +227,24 @@ class Renderer:
             setup_txt = self.font.render(f"SETUP {secs}s", True, settings.YELLOW)
             self.screen.blit(setup_txt, (panel_x + 260, panel_y))
 
-        # Config rows
+        # Two-column layout: config (left) and fitness (right)
         row_h = 16
         row_y_start = panel_y + 20
+        col_w = panel_w // 2
 
-        for row in range(ui.NUM_ROWS):
+        # --- Config column (left) ---
+        for row in range(ui.NUM_CONFIG_ROWS):
             ry = row_y_start + row * row_h
             if ry + row_h > strip_y + strip_h:
                 break
 
-            is_selected = (row == ui.cursor_row)
-            label = ui.ROW_LABELS[row]
-            value = ui.get_value_str(row)
+            is_selected = (ui.cursor_col == 0 and row == ui.cursor_row)
+            label = ui.CONFIG_LABELS[row]
+            value = ui.get_config_value_str(row)
 
-            # Highlight selected row
             if is_selected:
                 pygame.draw.rect(self.screen, (40, 40, 60),
-                                 (panel_x, ry, panel_w - 8, row_h))
+                                 (panel_x, ry, col_w - 4, row_h))
                 indicator = ">"
             else:
                 indicator = " "
@@ -249,39 +252,57 @@ class Renderer:
             label_color = settings.WHITE if is_selected else settings.LIGHT_GRAY
             value_color = settings.YELLOW if is_selected else settings.WHITE
 
-            # Separator before fitness section
-            if row == ui.ROW_FITNESS_START:
-                sep_y = ry - 2
-                pygame.draw.line(self.screen, settings.MID_GRAY,
-                                 (panel_x, sep_y), (panel_x + panel_w - 12, sep_y), 1)
-
-            # Color-code fitness values: green for positive, red for negative
-            if row >= ui.ROW_FITNESS_START:
-                fi = row - ui.ROW_FITNESS_START
-                if fi < len(FITNESS_PARAMS):
-                    key = FITNESS_PARAMS[fi][0]
-                    fval = ui.config.fitness_weights.get(key, FITNESS_PARAMS[fi][2])
-                    if fval > 0:
-                        value_color = settings.GREEN
-                    elif fval < 0:
-                        value_color = settings.RED
-                    else:
-                        value_color = settings.MID_GRAY
-
             txt = f"{indicator} {label}:"
             self.screen.blit(self.small_font.render(txt, True, label_color), (panel_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),
-                             (panel_x + 140, ry + 1))
+                             (panel_x + 100, ry + 1))
 
             # Show slot generation counts on the design row
             if row == ui.ROW_DESIGN:
                 slot_gens = stats.get('slot_generations', {})
                 for s in range(3):
-                    sx = panel_x + 200 + s * 50
+                    sx = panel_x + 135 + s * 35
                     sg = slot_gens.get(s, 0)
                     sc = team_color if s == slot else settings.MID_GRAY
                     slot_txt = f"B{s+1}:G{sg}"
                     self.screen.blit(self.small_font.render(slot_txt, True, sc), (sx, ry + 1))
+
+        # --- Fitness column (right) ---
+        fit_x = panel_x + col_w
+        for row in range(ui.NUM_FITNESS_ROWS):
+            ry = row_y_start + row * row_h
+            if ry + row_h > strip_y + strip_h:
+                break
+
+            is_selected = (ui.cursor_col == 1 and row == ui.cursor_row)
+            label = ui.FITNESS_LABELS[row]
+            value = ui.get_fitness_value_str(row)
+
+            if is_selected:
+                pygame.draw.rect(self.screen, (40, 40, 60),
+                                 (fit_x, ry, col_w - 4, row_h))
+                indicator = ">"
+            else:
+                indicator = " "
+
+            label_color = settings.WHITE if is_selected else settings.LIGHT_GRAY
+
+            # Color-code fitness values
+            key = FITNESS_PARAMS[row][0]
+            fval = ui.config.fitness_weights.get(key, FITNESS_PARAMS[row][2])
+            if is_selected:
+                value_color = settings.YELLOW
+            elif fval > 0:
+                value_color = settings.GREEN
+            elif fval < 0:
+                value_color = settings.RED
+            else:
+                value_color = settings.MID_GRAY
+
+            txt = f"{indicator} {label}:"
+            self.screen.blit(self.small_font.render(txt, True, label_color), (fit_x, ry + 1))
+            self.screen.blit(self.small_font.render(value, True, value_color),
+                             (fit_x + 110, ry + 1))
 
         # --- Arena viewport (right side) ---
         vp_x = panel_w + 4

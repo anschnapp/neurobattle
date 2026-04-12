@@ -19,6 +19,8 @@ class BlockType(Enum):
     SENSOR = auto()    # detects entities in its facing direction
     SCANNER = auto()   # scans enemies in its facing direction
     GATHERER = auto()  # magnetically collects battlefield resource drops
+    RADAR = auto()     # omnidirectional radar: detects Nth nearest enemy + friend (angle + dist)
+    BEACON = auto()    # base compass: detects enemy + friendly base (angle + dist), max 1 per robot
 
 
 class Direction(Enum):
@@ -123,16 +125,25 @@ class RobotBlueprint:
         return [b for b in self.blocks if b.block_type == BlockType.SCANNER and b.alive]
 
     @property
+    def radars(self) -> list[Block]:
+        return [b for b in self.blocks if b.block_type == BlockType.RADAR and b.alive]
+
+    @property
     def alive_blocks(self) -> list[Block]:
         return [b for b in self.blocks if b.alive]
 
     @property
     def brain_input_size(self) -> int:
-        """Each sensor provides 2 inputs: [distance, type]."""
+        """Each sensor provides 2 inputs: [distance, type].
+        Each radar provides 4 inputs: [enemy_angle, enemy_dist, friend_angle, friend_dist].
+        """
         n_sensors = len(self.sensors)
-        if n_sensors == 0:
+        n_radars = sum(1 for b in self.blocks if b.block_type == BlockType.RADAR)
+        has_beacon = any(b.block_type == BlockType.BEACON for b in self.blocks)
+        total = n_sensors * 2 + n_radars * 4 + (4 if has_beacon else 0)
+        if total == 0:
             return 1  # minimal dummy input (robot is blind)
-        return n_sensors * 2
+        return total
 
     @property
     def brain_output_size(self) -> int:

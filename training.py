@@ -34,11 +34,14 @@ def _simple_sensor_readings(robots: list[Robot]) -> list[np.ndarray | None]:
         if not robot.alive:
             continue
         sensor_blocks = [b for b in robot.blocks if b.block_type == BlockType.SENSOR]
-        if not sensor_blocks:
+        radar_blocks = [b for b in robot.blocks if b.block_type == BlockType.RADAR]
+        if not sensor_blocks and not radar_blocks:
             results[i] = np.zeros(robot.blueprint.brain_input_size, dtype=np.float32)
             continue
 
         readings = []
+
+        # --- Directional sensors ---
         for sensor in sensor_blocks:
             if not sensor.alive:
                 readings.append(0.0)
@@ -71,6 +74,72 @@ def _simple_sensor_readings(robots: list[Robot]) -> list[np.ndarray | None]:
 
             readings.append(best_dist / s_range)
             readings.append(best_type)
+
+        # --- Radar blocks: Nth nearest enemy + Nth nearest friend ---
+        if radar_blocks:
+            enemies = []
+            friends = []
+            for j, other in enumerate(robots):
+                if j == i or not other.alive:
+                    continue
+                dx = other.pos[0] - robot.pos[0]
+                dy = other.pos[1] - robot.pos[1]
+                d = math.sqrt(dx * dx + dy * dy)
+                if d < 0.001:
+                    continue
+                # Angle relative to robot's facing direction, normalized to [-1, 1]
+                angle = math.atan2(dy, dx) - robot.angle
+                # Wrap to [-pi, pi]
+                angle = (angle + math.pi) % (2 * math.pi) - math.pi
+                entry = (d, angle / math.pi)  # dist, normalized angle
+                if other.team != robot.team:
+                    enemies.append(entry)
+                else:
+                    friends.append(entry)
+            enemies.sort()
+            friends.sort()
+            arena_diag = math.sqrt(800**2 + 400**2)  # normalization constant
+
+            for r_idx, radar in enumerate(radar_blocks):
+                if not radar.alive:
+                    readings.extend([0.0, 0.0, 0.0, 0.0])
+                    continue
+                # Nth nearest enemy
+                if r_idx < len(enemies):
+                    e_dist, e_angle = enemies[r_idx]
+                    readings.append(e_angle)                  # [-1, 1]
+                    readings.append(1.0 - min(e_dist / arena_diag, 1.0))  # 1=close, 0=far
+                else:
+                    readings.extend([0.0, 0.0])
+                # Nth nearest friend
+                if r_idx < len(friends):
+                    f_dist, f_angle = friends[r_idx]
+                    readings.append(f_angle)
+                    readings.append(1.0 - min(f_dist / arena_diag, 1.0))
+                else:
+                    readings.extend([0.0, 0.0])
+
+        # --- Beacon: enemy base + friendly base ---
+        has_beacon = any(
+            b.block_type == BlockType.BEACON and b.alive for b in robot.blocks
+        )
+        if has_beacon:
+            # Virtual base positions: friendly at left, enemy at right (for team 0)
+            friendly_base = np.array([0.0, 200.0], dtype=np.float32)
+            enemy_base = np.array([800.0, 200.0], dtype=np.float32)
+            if robot.team == 1:
+                friendly_base, enemy_base = enemy_base, friendly_base
+            for base_pos in (enemy_base, friendly_base):
+                dx = base_pos[0] - robot.pos[0]
+                dy = base_pos[1] - robot.pos[1]
+                d = math.sqrt(dx * dx + dy * dy)
+                if d < 0.001:
+                    readings.extend([0.0, 1.0])
+                else:
+                    angle = math.atan2(dy, dx) - robot.angle
+                    angle = (angle + math.pi) % (2 * math.pi) - math.pi
+                    readings.append(angle / math.pi)
+                    readings.append(1.0 - min(d / arena_diag, 1.0))
 
         results[i] = np.array(readings, dtype=np.float32)
     return results
@@ -129,6 +198,9 @@ FITNESS_PARAMS = [
     ('survival',      'Survival',      0.1,   -2.0,   2.0,  0.1),
     ('damage_taken',  'Damage taken', -5.0,  -50.0,  50.0,  5.0),
     ('dist_to_enemy', 'Dist to enemy', 0.0,  -10.0,  10.0,  1.0),
+    ('dist_to_friend','Dist to friend',0.0,  -10.0,  10.0,  1.0),
+    ('dist_to_ebase', 'Dist to eBase', 0.0,  -10.0,  10.0,  1.0),
+    ('dist_to_fbase', 'Dist to fBase', 0.0,  -10.0,  10.0,  1.0),
     ('collect',       'Collect res',   0.0, -100.0, 100.0, 10.0),
     ('scan_enemy',    'Scan enemy',    0.0, -200.0, 200.0, 10.0),
 ]
@@ -147,6 +219,7 @@ class TrainingZoneConfig:
     friend_slot: int = -1     # -1 = none, 0-2 = design index
     friend_count: int = 0
     resource_count: int = 0   # scattered resource drops in the arena for gatherer training
+    spawn_distance: int = 2   # 0=close, 1=medium, 2=far (default: far, original behavior)
     fitness_weights: dict = field(default_factory=lambda: dict(DEFAULT_FITNESS_WEIGHTS))
 
     def to_dict(self) -> dict:
@@ -157,6 +230,7 @@ class TrainingZoneConfig:
             'friend_slot': self.friend_slot,
             'friend_count': self.friend_count,
             'resource_count': self.resource_count,
+            'spawn_distance': self.spawn_distance,
             'fitness_weights': dict(self.fitness_weights),
         }
 
@@ -169,6 +243,7 @@ class TrainingZoneConfig:
             friend_slot=d['friend_slot'],
             friend_count=d['friend_count'],
             resource_count=d.get('resource_count', 0),
+            spawn_distance=d.get('spawn_distance', 2),
             fitness_weights=dict(d['fitness_weights']),
         )
 
@@ -407,10 +482,23 @@ class TrainingArena:
 
     def _random_spawn_pos(self, team: int) -> np.ndarray:
         margin = 30.0
+        # spawn_distance: 0=close, 1=medium, 2=far
+        sd = self.config.spawn_distance
+        # Team 0 (students) on left, team 1 (enemies) on right
+        # Ranges narrow as spawn_distance decreases
+        if sd == 0:    # close: both teams near center
+            t0_lo, t0_hi = 0.3, 0.45
+            t1_lo, t1_hi = 0.55, 0.7
+        elif sd == 1:  # medium
+            t0_lo, t0_hi = 0.15, 0.4
+            t1_lo, t1_hi = 0.6, 0.85
+        else:          # far (original)
+            t0_lo, t0_hi = 0.04, 0.4
+            t1_lo, t1_hi = 0.6, 0.96
         if team == 0:
-            x = np.random.uniform(margin, self.width * 0.4)
+            x = np.random.uniform(self.width * t0_lo + margin, self.width * t0_hi)
         else:
-            x = np.random.uniform(self.width * 0.6, self.width - margin)
+            x = np.random.uniform(self.width * t1_lo, self.width * t1_hi - margin)
         y = np.random.uniform(margin, self.height - margin)
         return np.array([x, y], dtype=np.float32)
 
@@ -445,6 +533,26 @@ class TrainingArena:
             clamp_to_arena(robot.pos, robot.radius, w, h)
 
         _simple_robot_collisions(alive_all)
+
+        # Accumulate distances for fitness
+        alive_enemies = [r for r in self.sparring if r.alive and r.team != 0]
+        alive_friends = [r for r in self.sparring if r.alive and r.team == 0]
+        # Virtual base positions (team 0 students: friendly=left, enemy=right)
+        enemy_base_pos = np.array([float(w), float(h) * 0.5], dtype=np.float32)
+        friend_base_pos = np.array([0.0, float(h) * 0.5], dtype=np.float32)
+        for s in self.students:
+            if not s.alive:
+                continue
+            if alive_enemies:
+                enemy_positions = np.array([e.pos for e in alive_enemies])
+                dists = np.linalg.norm(enemy_positions - s.pos, axis=1)
+                s.cum_dist_to_enemy += float(np.min(dists))
+            if alive_friends:
+                friend_positions = np.array([f.pos for f in alive_friends])
+                dists = np.linalg.norm(friend_positions - s.pos, axis=1)
+                s.cum_dist_to_friend += float(np.min(dists))
+            s.cum_dist_to_ebase += float(np.linalg.norm(enemy_base_pos - s.pos))
+            s.cum_dist_to_fbase += float(np.linalg.norm(friend_base_pos - s.pos))
 
         hits = _simple_bullet_collisions(self.bullets, alive_all)
         for bi, target, bpos in hits:
@@ -495,14 +603,25 @@ class TrainingArena:
         slot = self.active_slot
 
         for i, robot in enumerate(self.students):
-            # Distance toward enemy side (right edge of arena, normalized 0..1)
-            dist_score = robot.pos[0] / self.width if robot.alive else 0.0
+            arena_diag = np.sqrt(self.width**2 + self.height**2)
+            if robot.ticks_alive > 0:
+                t = robot.ticks_alive
+                # All inverted: 1.0 = close, 0.0 = far
+                dist_enemy = 1.0 - min(robot.cum_dist_to_enemy / t / arena_diag, 1.0)
+                dist_friend = 1.0 - min(robot.cum_dist_to_friend / t / arena_diag, 1.0)
+                dist_ebase = 1.0 - min(robot.cum_dist_to_ebase / t / arena_diag, 1.0)
+                dist_fbase = 1.0 - min(robot.cum_dist_to_fbase / t / arena_diag, 1.0)
+            else:
+                dist_enemy = dist_friend = dist_ebase = dist_fbase = 0.0
             fitness = (
                 robot.hits_dealt * w.get('hit_enemy', 0)
                 + robot.hits_friend * w.get('hit_friend', 0)
                 + robot.ticks_alive * w.get('survival', 0)
                 + robot.hits_taken * w.get('damage_taken', 0)
-                + dist_score * w.get('dist_to_enemy', 0)
+                + dist_enemy * w.get('dist_to_enemy', 0)
+                + dist_friend * w.get('dist_to_friend', 0)
+                + dist_ebase * w.get('dist_to_ebase', 0)
+                + dist_fbase * w.get('dist_to_fbase', 0)
                 + robot.resources_collected * w.get('collect', 0)
                 + robot.scans_enemy * w.get('scan_enemy', 0)
             )
@@ -806,28 +925,39 @@ class TrainingZoneProxy:
 class TrainingZoneUI:
     """Handles player input for training zone configuration during match."""
 
+    # Column 0: config rows
     ROW_DESIGN = 0
     ROW_ENEMY_TYPE = 1
     ROW_ENEMY_COUNT = 2
     ROW_FRIEND_TYPE = 3
     ROW_FRIEND_COUNT = 4
     ROW_RESOURCES = 5
-    ROW_FITNESS_START = 6
-    NUM_ROWS = ROW_FITNESS_START + len(FITNESS_PARAMS)
+    ROW_SPAWN_DIST = 6
+    NUM_CONFIG_ROWS = 7
 
-    # Labels for rendering
-    ROW_LABELS = [
+    # Column 1: fitness rows (indexed from 0 within the column)
+    NUM_FITNESS_ROWS = len(FITNESS_PARAMS)
+
+    SPAWN_DIST_LABELS = ['Close', 'Medium', 'Far']
+
+    # Labels for config column
+    CONFIG_LABELS = [
         'Design',
         'Enemy type',
         'Enemy count',
         'Friend type',
         'Friend count',
         'Resources',
-    ] + [p[1] for p in FITNESS_PARAMS]
+        'Spawn dist',
+    ]
+
+    # Labels for fitness column
+    FITNESS_LABELS = [p[1] for p in FITNESS_PARAMS]
 
     def __init__(self, player_id: int, blueprints: list[RobotBlueprint]):
         self.player_id = player_id
         self.blueprints = blueprints
+        self.cursor_col = 0   # 0=config, 1=fitness
         self.cursor_row = 0
         self.config = TrainingZoneConfig()
         self._config_dirty = True
@@ -849,10 +979,20 @@ class TrainingZoneUI:
         pk = settings.PLAYER_KEYS[self.player_id]
         changed = False
 
+        max_row = self.NUM_CONFIG_ROWS - 1 if self.cursor_col == 0 else self.NUM_FITNESS_ROWS - 1
+
         if self._key_event(keys_pressed, pk['up']):
             self.cursor_row = max(0, self.cursor_row - 1)
         if self._key_event(keys_pressed, pk['down']):
-            self.cursor_row = min(self.NUM_ROWS - 1, self.cursor_row + 1)
+            self.cursor_row = min(max_row, self.cursor_row + 1)
+        if self._key_event(keys_pressed, pk['left']):
+            if self.cursor_col > 0:
+                self.cursor_col = 0
+                self.cursor_row = min(self.cursor_row, self.NUM_CONFIG_ROWS - 1)
+        if self._key_event(keys_pressed, pk['right']):
+            if self.cursor_col < 1:
+                self.cursor_col = 1
+                self.cursor_row = min(self.cursor_row, self.NUM_FITNESS_ROWS - 1)
 
         if self._key_event(keys_pressed, pk['primary']):
             changed = self._adjust(+1)
@@ -881,6 +1021,18 @@ class TrainingZoneUI:
         row = self.cursor_row
         cfg = self.config
 
+        if self.cursor_col == 1:
+            # Fitness column
+            if row < len(FITNESS_PARAMS):
+                key, _label, default, lo, hi, step = FITNESS_PARAMS[row]
+                old_val = cfg.fitness_weights.get(key, default)
+                new_val = max(lo, min(hi, old_val + direction * step))
+                if abs(new_val - old_val) > 1e-9:
+                    cfg.fitness_weights[key] = round(new_val, 2)
+                    return True
+            return False
+
+        # Config column
         if row == self.ROW_DESIGN:
             return self._cycle_slot('active_slot', direction)
 
@@ -915,15 +1067,11 @@ class TrainingZoneUI:
                 cfg.resource_count = new
                 return True
 
-        elif row >= self.ROW_FITNESS_START:
-            fi = row - self.ROW_FITNESS_START
-            if fi < len(FITNESS_PARAMS):
-                key, _label, default, lo, hi, step = FITNESS_PARAMS[fi]
-                old_val = cfg.fitness_weights.get(key, default)
-                new_val = max(lo, min(hi, old_val + direction * step))
-                if abs(new_val - old_val) > 1e-9:
-                    cfg.fitness_weights[key] = round(new_val, 2)
-                    return True
+        elif row == self.ROW_SPAWN_DIST:
+            new = max(0, min(2, cfg.spawn_distance + direction))
+            if new != cfg.spawn_distance:
+                cfg.spawn_distance = new
+                return True
 
         return False
 
@@ -939,8 +1087,8 @@ class TrainingZoneUI:
             return True
         return False
 
-    def get_value_str(self, row: int) -> str:
-        """Get display string for the value at a given row."""
+    def get_config_value_str(self, row: int) -> str:
+        """Get display string for a config column row."""
         cfg = self.config
         if row == self.ROW_DESIGN:
             return f"Bot {cfg.active_slot + 1}"
@@ -954,14 +1102,18 @@ class TrainingZoneUI:
             return str(cfg.friend_count)
         elif row == self.ROW_RESOURCES:
             return str(cfg.resource_count)
-        elif row >= self.ROW_FITNESS_START:
-            fi = row - self.ROW_FITNESS_START
-            if fi < len(FITNESS_PARAMS):
-                key = FITNESS_PARAMS[fi][0]
-                val = cfg.fitness_weights.get(key, FITNESS_PARAMS[fi][2])
-                if abs(val) < 1.0 and val != 0:
-                    return f"{val:+.1f}"
-                return f"{val:+.0f}"
+        elif row == self.ROW_SPAWN_DIST:
+            return self.SPAWN_DIST_LABELS[cfg.spawn_distance]
+        return ""
+
+    def get_fitness_value_str(self, row: int) -> str:
+        """Get display string for a fitness column row."""
+        if row < len(FITNESS_PARAMS):
+            key = FITNESS_PARAMS[row][0]
+            val = self.config.fitness_weights.get(key, FITNESS_PARAMS[row][2])
+            if abs(val) < 1.0 and val != 0:
+                return f"{val:+.1f}"
+            return f"{val:+.0f}"
         return ""
 
     def is_dirty(self) -> bool:

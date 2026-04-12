@@ -62,6 +62,18 @@
           "grid_y": 3,
           "type": "ENGINE",
           "direction": "RIGHT"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": 0,
+          "type": "RADAR",
+          "direction": "RIGHT"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": 1,
+          "type": "GATHERER",
+          "direction": "RIGHT"
         }
       ]
     },
@@ -229,6 +241,12 @@
           "grid_y": -1,
           "type": "WEAPON",
           "direction": "UP"
+        },
+        {
+          "grid_x": 2,
+          "grid_y": 1,
+          "type": "RADAR",
+          "direction": "RIGHT"
         }
       ]
     },

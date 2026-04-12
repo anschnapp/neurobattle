@@ -39,6 +39,8 @@ BLOCK_CYCLE = [
     BlockType.SENSOR,
     BlockType.SCANNER,
     BlockType.GATHERER,
+    BlockType.RADAR,
+    BlockType.BEACON,
     None,  # remove
 ]
 
@@ -58,6 +60,8 @@ BLOCK_LABELS = {
     BlockType.SENSOR:   "S",
     BlockType.SCANNER:  "Sc",
     BlockType.GATHERER: "G",
+    BlockType.RADAR:    "R",
+    BlockType.BEACON:   "B",
 }
 
 # Key repeat timing (frames)
@@ -189,6 +193,14 @@ class PlayerAssembly:
         else:
             idx = BLOCK_CYCLE.index(block.block_type)
             nxt = BLOCK_CYCLE[(idx + 1) % len(BLOCK_CYCLE)]
+            # Skip BEACON if one already exists on a different block
+            if nxt == BlockType.BEACON:
+                has_beacon = any(
+                    b.block_type == BlockType.BEACON and b is not block
+                    for b in self.current_blueprint.blocks
+                )
+                if has_beacon:
+                    nxt = BLOCK_CYCLE[(BLOCK_CYCLE.index(nxt) + 1) % len(BLOCK_CYCLE)]
             if nxt is None:
                 self.current_blueprint.blocks.remove(block)
             else:
@@ -460,6 +472,16 @@ class AssemblyScreen:
                 d = b.direction.name[0]
                 labels.append(f"S({d}) dist")
                 labels.append(f"S({d}) type")
+        radar_idx = 0
+        for b in bp.blocks:
+            if b.block_type == BlockType.RADAR:
+                radar_idx += 1
+                labels.append(f"R{radar_idx} eAng")
+                labels.append(f"R{radar_idx} eDst")
+                labels.append(f"R{radar_idx} fAng")
+                labels.append(f"R{radar_idx} fDst")
+        if any(b.block_type == BlockType.BEACON for b in bp.blocks):
+            labels.extend(["B eAng", "B eDst", "B fAng", "B fDst"])
         if not labels:
             labels.append("(blind)")
         return labels
@@ -604,6 +626,8 @@ class AssemblyScreen:
             ("S", "Sensor", BLOCK_COLORS[BlockType.SENSOR]),
             ("Sc", "Scanner", BLOCK_COLORS[BlockType.SCANNER]),
             ("G", "Gatherer", BLOCK_COLORS[BlockType.GATHERER]),
+            ("R", "Radar", BLOCK_COLORS[BlockType.RADAR]),
+            ("B", "Beacon", BLOCK_COLORS[BlockType.BEACON]),
         ]
         x = px + 10
         for short, name, color in items:

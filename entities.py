@@ -30,6 +30,10 @@ class Robot:
     distance_traveled: float = 0.0
     resources_collected: int = 0
     scans_enemy: int = 0
+    cum_dist_to_enemy: float = 0.0
+    cum_dist_to_friend: float = 0.0
+    cum_dist_to_ebase: float = 0.0
+    cum_dist_to_fbase: float = 0.0
 
     def __post_init__(self):
         if self.velocity is None:
