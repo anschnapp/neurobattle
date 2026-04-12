@@ -97,8 +97,10 @@ GATHERER_PULL_SPEED = 2.0   # how fast resources fly toward gatherer
 RESOURCE_RADIUS = 4
 RESOURCE_VALUE = 1           # fitness credit per pickup
 
-# --- Auto-fork ---
-AUTO_FORK_COOLDOWN = 300  # ticks between auto-forks
+# --- Resource / Spawn ---
+RESOURCE_INCOME_PER_SECOND = 5.0   # resources gained per second (passive)
+SPAWN_COST_PER_BLOCK = 10          # resource cost per block in the blueprint
+RESOURCE_RECLAIM_FRACTION = 0.3    # fraction of spawn cost reclaimed on destroy
 
 # --- Controls ---
 # Input is read via pygame.key.get_pressed() (polling) to avoid modifier interference.

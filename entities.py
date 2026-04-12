@@ -24,6 +24,8 @@ class Robot:
     hp: float = 0.0
     max_hp: float = 0.0
     velocity: np.ndarray = field(default=None)
+    # Generation tracking (which training generation this brain came from)
+    generation: int = 0
     # Fitness tracking
     hits_dealt: int = 0
     hits_friend: int = 0

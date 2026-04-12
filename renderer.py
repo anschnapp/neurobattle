@@ -29,6 +29,7 @@ class Renderer:
         self.font = pygame.font.SysFont("monospace", 14)
         self.big_font = pygame.font.SysFont("monospace", 28, bold=True)
         self.small_font = pygame.font.SysFont("monospace", 11)
+        self.gen_font = pygame.font.SysFont("monospace", 9)
 
     def clear(self):
         self.screen.fill(settings.DARK_GRAY)
@@ -136,6 +137,14 @@ class Renderer:
                     indicator_color = settings.CYAN
                 pygame.draw.circle(self.screen, indicator_color, (int(ix), int(iy)), 2)
 
+        # Generation number below the robot
+        gen_label = str(robot.generation)
+        gen_color = settings.TEAM_COLORS[robot.team]
+        gen_surf = self.gen_font.render(gen_label, True, gen_color)
+        gx = int(robot.pos[0]) + ox - gen_surf.get_width() // 2
+        gy = int(robot.pos[1]) + oy + int(robot.radius) + 2
+        self.screen.blit(gen_surf, (gx, gy))
+
     def draw_bullet(self, bullet: Bullet, offset_x: int = 0, offset_y: int = 0):
         if not bullet.alive:
             return
@@ -146,15 +155,19 @@ class Renderer:
         bright = tuple(min(255, c + 100) for c in color)
         pygame.draw.circle(self.screen, bright, (x, y), bullet.radius)
 
-    def draw_hud(self, bases: list[Base], robots: list[Robot], tick: int):
+    def draw_hud(self, bases: list[Base], robots: list[Robot], tick: int,
+                 resources: list[float] | None = None):
         oy = settings.BATTLEFIELD_Y
         for i, base in enumerate(bases):
             side = "P1" if base.team == 0 else "P2"
             color = settings.TEAM_COLORS[base.team]
-            wall_str = f"Wall: {int(base.wall_hp)}" if base.wall_alive else "BREACHED"
-            cmd_str = "CMD: OK" if base.commander_alive else "CMD: DEAD"
+            wall_str = f"Wall:{int(base.wall_hp)}" if base.wall_alive else "BREACHED"
+            cmd_str = "CMD:OK" if base.commander_alive else "CMD:DEAD"
             n_bots = sum(1 for r in robots if r.team == base.team and r.alive)
-            text = f"{side}  {wall_str}  {cmd_str}  Bots:{n_bots}"
+            res_str = ""
+            if resources is not None:
+                res_str = f"  ${int(resources[base.team])}"
+            text = f"{side}  {wall_str}  {cmd_str}  Bots:{n_bots}{res_str}"
             surf = self.font.render(text, True, color)
             x = 10 if i == 0 else settings.SCREEN_WIDTH - surf.get_width() - 10
             self.screen.blit(surf, (x, oy + 8))
@@ -221,24 +234,77 @@ class Renderer:
             setup_txt = self.font.render(f"SETUP {secs}s", True, settings.YELLOW)
             self.screen.blit(setup_txt, (panel_x + 260, panel_y))
 
-        # Two-column layout: config (left) and fitness (right)
+        # Three-column layout: spawn (left), config (center), fitness (right)
         row_h = 16
         row_y_start = panel_y + 20
-        col_w = panel_w // 2
+        col_w = panel_w // 3
 
-        # --- Config column (left) ---
-        for row in range(ui.NUM_CONFIG_ROWS):
+        # Resource display in header area
+        res_txt = f"${int(ui.resources)}"
+        res_surf = self.font.render(res_txt, True, settings.YELLOW)
+        self.screen.blit(res_surf, (panel_x + panel_w - res_surf.get_width() - 4, panel_y))
+
+        # --- Spawn column (left, col 0) ---
+        spawn_x = panel_x
+        for row in range(ui.NUM_SPAWN_ROWS):
             ry = row_y_start + row * row_h
             if ry + row_h > strip_y + strip_h:
                 break
 
             is_selected = (ui.cursor_col == 0 and row == ui.cursor_row)
+            label = ui.SPAWN_LABELS[row]
+            value = ui.get_spawn_value_str(row)
+
+            is_spawn_row = row in (ui.ROW_SPAWN_0, ui.ROW_SPAWN_1, ui.ROW_SPAWN_2)
+            is_destroy_row = (row == ui.ROW_DESTROY)
+
+            if is_selected:
+                pygame.draw.rect(self.screen, (40, 40, 60),
+                                 (spawn_x, ry, col_w - 4, row_h))
+                indicator = ">"
+            else:
+                indicator = " "
+
+            if is_spawn_row:
+                slot_idx = row - ui.ROW_SPAWN_0
+                bp = ui.blueprints[slot_idx]
+                if not bp.blocks:
+                    label_color = settings.MID_GRAY
+                    value_color = settings.MID_GRAY
+                else:
+                    cost = len(bp.blocks) * settings.SPAWN_COST_PER_BLOCK
+                    affordable = ui.resources >= cost
+                    label_color = settings.GREEN if affordable else settings.RED
+                    value_color = settings.GREEN if affordable else settings.RED
+                    if is_selected:
+                        label_color = settings.WHITE
+                        value_color = settings.YELLOW
+            elif is_destroy_row:
+                label_color = settings.ORANGE if is_selected else (180, 100, 40)
+                value_color = label_color
+            else:
+                label_color = settings.WHITE if is_selected else settings.LIGHT_GRAY
+                value_color = settings.YELLOW if is_selected else settings.WHITE
+
+            txt = f"{indicator} {label}:"
+            self.screen.blit(self.small_font.render(txt, True, label_color), (spawn_x, ry + 1))
+            self.screen.blit(self.small_font.render(value, True, value_color),
+                             (spawn_x + 80, ry + 1))
+
+        # --- Config column (center, col 1) ---
+        cfg_x = panel_x + col_w
+        for row in range(ui.NUM_CONFIG_ROWS):
+            ry = row_y_start + row * row_h
+            if ry + row_h > strip_y + strip_h:
+                break
+
+            is_selected = (ui.cursor_col == 1 and row == ui.cursor_row)
             label = ui.CONFIG_LABELS[row]
             value = ui.get_config_value_str(row)
 
             if is_selected:
                 pygame.draw.rect(self.screen, (40, 40, 60),
-                                 (panel_x, ry, col_w - 4, row_h))
+                                 (cfg_x, ry, col_w - 4, row_h))
                 indicator = ">"
             else:
                 indicator = " "
@@ -247,28 +313,28 @@ class Renderer:
             value_color = settings.YELLOW if is_selected else settings.WHITE
 
             txt = f"{indicator} {label}:"
-            self.screen.blit(self.small_font.render(txt, True, label_color), (panel_x, ry + 1))
+            self.screen.blit(self.small_font.render(txt, True, label_color), (cfg_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),
-                             (panel_x + 100, ry + 1))
+                             (cfg_x + 80, ry + 1))
 
             # Show slot generation counts on the design row
             if row == ui.ROW_DESIGN:
                 slot_gens = stats.get('slot_generations', {})
                 for s in range(3):
-                    sx = panel_x + 135 + s * 35
+                    sx = cfg_x + 105 + s * 35
                     sg = slot_gens.get(s, 0)
                     sc = team_color if s == slot else settings.MID_GRAY
                     slot_txt = f"B{s+1}:G{sg}"
                     self.screen.blit(self.small_font.render(slot_txt, True, sc), (sx, ry + 1))
 
-        # --- Fitness column (right) ---
-        fit_x = panel_x + col_w
+        # --- Fitness column (right, col 2) ---
+        fit_x = panel_x + col_w * 2
         for row in range(ui.NUM_FITNESS_ROWS):
             ry = row_y_start + row * row_h
             if ry + row_h > strip_y + strip_h:
                 break
 
-            is_selected = (ui.cursor_col == 1 and row == ui.cursor_row)
+            is_selected = (ui.cursor_col == 2 and row == ui.cursor_row)
             label = ui.FITNESS_LABELS[row]
             value = ui.get_fitness_value_str(row)
 
@@ -296,7 +362,7 @@ class Renderer:
             txt = f"{indicator} {label}:"
             self.screen.blit(self.small_font.render(txt, True, label_color), (fit_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),
-                             (fit_x + 110, ry + 1))
+                             (fit_x + 80, ry + 1))
 
         # --- Arena viewport (right side) ---
         vp_x = panel_w + 4
@@ -316,6 +382,24 @@ class Renderer:
         scaled_h = zone.height * scale
         ox = vp_x + (vp_w - scaled_w) / 2
         oy = vp_y + (vp_h - scaled_h) / 2
+
+        # Draw bases
+        base_r = int(settings.BASE_RADIUS * scale)
+        for base_pos, is_friendly in ((zone.friendly_base_pos, True),
+                                       (zone.enemy_base_pos, False)):
+            bx = int(base_pos[0] * scale + ox)
+            by = int(base_pos[1] * scale + oy)
+            if is_friendly:
+                base_color = tuple(c // 4 for c in settings.TEAM_COLORS[player_id])
+            else:
+                base_color = tuple(c // 4 for c in settings.TEAM_COLORS[1 - player_id])
+            # Wall circle
+            pygame.draw.circle(self.screen, base_color, (bx, by),
+                               base_r + 2, max(1, int(3 * scale)))
+            # Commander dot
+            cmd_color = settings.TEAM_COLORS[player_id] if is_friendly else settings.TEAM_COLORS[1 - player_id]
+            pygame.draw.circle(self.screen, cmd_color, (bx, by),
+                               max(2, int(settings.COMMANDER_RADIUS * scale)))
 
         # Draw robots
         self._draw_zone_robots(zone, player_id, ox, oy, scale)

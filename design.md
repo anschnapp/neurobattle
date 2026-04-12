@@ -110,8 +110,9 @@ Training is free (no resource cost). Each player has a **single training zone** 
 
 - The zone is isolated — hard borders, no connection to the battlefield.
 - Layout: config panel on the left (350px), arena viewport on the right (remaining width).
-- Config panel is split into two columns: left column shows training config (design selector, enemy/friend sparring type and count, resource drops, spawn distance), right column shows all 10 fitness weight sliders. Player navigates with up/down within a column, left/right to switch columns, primary/secondary to adjust values.
+- Config panel is split into three columns: left column for spawn actions (spawn bot 1/2/3, destroy old), center column for training config (design selector, enemy/friend sparring type and count, resource drops, spawn distance), right column for all 10 fitness weight sliders. Player navigates with up/down within a column, left/right to switch columns, primary/secondary to adjust values.
 - **Spawn distance:** configurable as Close/Medium/Far. Controls how far apart students and enemies spawn. Close puts them within sensor range from the start — useful for early training before radar-equipped bots learn long-range navigation.
+- **Bases in training:** Each training zone contains a friendly base and an enemy base, positioned to match the player's actual game layout (Player 1: friendly left, enemy right; Player 2: friendly right, enemy left). Students spawn near their friendly base, enemies near the enemy base. Base positions are used for beacon inputs and distance fitness metrics, ensuring trained brains transfer correctly to the battlefield. Bases are rendered as dim wall circles with a commander dot in team colors.
 - Arena viewport shows the simulation with stats overlay (generation, fitness, alive count).
 - Per-slot generation counts are displayed so the player can see progress on all 3 designs.
 - **Resource injection:** The player can configure how many resource drops (0-20) spawn each generation. This allows training pure gatherers without needing the full battlefield resource system — bots evolve to magnetically collect yellow drops via GATHERER blocks.
@@ -156,26 +157,39 @@ Fitness weight values are color-coded in the UI: green for positive, red for neg
 
 ## Resource System
 
-The only resource is a single currency that accumulates over time.
+The only resource is a single currency that accumulates over time. Robots are **manually spawned** by the player — no auto-spawning.
 
 ### Income Sources
 
-- **Passive income** — flat rate per second, always ticking
-- **Recycling** — player can issue "kill all below generation N" to destroy obsolete units and reclaim some resources
+- **Passive income** — flat rate per second, always ticking (5 resources/sec)
+- **Destroying old generations** — player can destroy all robots of their oldest generation on the battlefield, reclaiming 30% of their spawn cost
 - **Battlefield drops** — destroyed enemy robots drop partial resource value on the battlefield, must be **collected by a robot with a Gatherer module** (resources fly toward the gatherer magnetically)
 
 ### Spending
 
-- The player allocates income rate across their 3 robot types (e.g., 60% to fighters, 30% to gatherers, 10% to scouts).
-- When accumulated resources for a type reach the cost threshold of one unit, it **auto-spawns** at the base.
-- Higher block count = higher cost = slower spawn rate.
+- **3 spawn buttons** (one per robot design) in the training zone config panel.
+- Each button shows the cost (block count × 10 resources per block).
+- The player manually decides when to spawn each type — press primary action on a spawn button to deploy one robot of that design with the latest trained brain.
+- Spawn buttons are color-coded: **green** when affordable, **red** when too expensive.
+
+### Destroy Oldest Generation
+
+- **1 destroy button** in the training zone config panel.
+- Kills all robots of the player's oldest generation currently on the battlefield.
+- Reclaims 30% of their spawn cost as resources.
+- Useful for clearing out obsolete bots that are wasting space and replacing them with better-trained ones.
+
+### Generation Numbers
+
+- Each robot on the battlefield displays a small **generation number** below it, showing which training generation its brain came from.
+- This lets the player visually identify which bots are old/obsolete vs newly deployed.
 
 ### Strategic Tradeoffs
 
-- Cheap robots (few blocks) spawn fast but are weak and dumb
-- Expensive robots (many blocks) are capable but spawn slowly and train slowly
-- Allocating income to gatherers creates a resource feedback loop but fewer combat units
-- Recycling old generations frees resources but reduces battlefield presence
+- Cheap robots (few blocks) are affordable but weak and dumb
+- Expensive robots (many blocks) are capable but drain resources fast
+- The player must choose **when** to spawn — deploying too early wastes resources on undertrained bots, waiting too long leaves the battlefield empty
+- Destroying old generations frees partial resources but reduces battlefield presence
 
 ## Scanning
 
@@ -194,17 +208,10 @@ This creates a natural arms race:
 
 ## Defense and Catch-Up Mechanics
 
-### Auto-Forking
-
-- The player's base automatically forks (clones) currently active bots near the base on a cooldown.
-- Forks are copies of the current generation, not improved versions.
-- This gives the defensive player a stream of reinforcements without spending resources.
-- Buys time but doesn't win the game on its own, since forks don't evolve further.
-
 ### Defensive Advantage
 
 - The base wall and turret(s) provide natural defensive strength.
-- Auto-forking means an attacker must sustain pressure to overwhelm defenses.
+- Manual spawning means the player can stockpile resources and deploy a wave of well-trained bots at a critical moment.
 - But a decisive lead should still convert to a fast win. No drawn-out inevitable losses.
 
 ## Win Condition
@@ -261,7 +268,7 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports
 - `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs, live network visualization with input/output labels, hidden size selector with suggestions, param count)
 - `main.py` — game loop with ASSEMBLY → MATCH phase state machine
-- `training.py` — single training zone per player with configurable sparring and fitness. One zone trains one design at a time with hot-swap (populations preserved per design). Zone runs in its own subprocess via `multiprocessing` (spawn context). Worker ticks at 3× game speed (rate-limited), sends render snapshots + best brains through Pipes, receives config updates. Main process holds `TrainingZoneProxy` (render data) + `TrainingZoneUI` (player input handling with two-column cursor navigation and key repeat). Config panel on left (350px) split into two columns: left column for training config, right column for fitness sliders. Arena viewport on right. Lightweight pure-Python physics for small entity counts, including radar/beacon input computation with virtual base positions. **Training zone config:** active design selector, enemy sparring type/count, friend sparring type/count, resource drop count (for gatherer training), spawn distance (close/medium/far), 10 fitness weight sliders (hit enemy, hit friend, survival, damage taken, dist to enemy, dist to friend, dist to enemy base, dist to friendly base, collect resources, scan enemy). Distance fitness metrics use per-tick accumulation of actual distances (not positional proxies). 15-second setup period at match start (training paused, player configures). Resource drops are yellow collectibles gathered magnetically by GATHERER blocks.
+- `training.py` — single training zone per player with configurable sparring and fitness. One zone trains one design at a time with hot-swap (populations preserved per design). Zone runs in its own subprocess via `multiprocessing` (spawn context). Worker ticks at 3× game speed (rate-limited), sends render snapshots + best brains through Pipes, receives config updates. Main process holds `TrainingZoneProxy` (render data) + `TrainingZoneUI` (player input handling with two-column cursor navigation and key repeat). Config panel on left (350px) split into three columns: spawn actions, training config, fitness sliders. Arena viewport on right. Lightweight pure-Python physics for small entity counts, including radar/beacon input computation with per-player base positions. Training zones include visible friendly and enemy bases matching the player's game-side layout (P1: friendly left/enemy right, P2: friendly right/enemy left); students spawn near their friendly base, enemies near the enemy base. Base positions feed into beacon inputs and distance fitness metrics. **Training zone config:** active design selector, enemy sparring type/count, friend sparring type/count, resource drop count (for gatherer training), spawn distance (close/medium/far), 10 fitness weight sliders (hit enemy, hit friend, survival, damage taken, dist to enemy, dist to friend, dist to enemy base, dist to friendly base, collect resources, scan enemy). Distance fitness metrics use per-tick accumulation of actual distances (not positional proxies). 15-second setup period at match start (training paused, player configures). Resource drops are yellow collectibles gathered magnetically by GATHERER blocks.
 
 ### Needs Rework
 - ~~**Training system** — restructure from 3 arenas per player to 1 training zone per player. Wider zone (full screen width), single active design with hot-swap, 15s setup delay at match start, generation count indicator.~~ (done)
@@ -269,7 +276,8 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - **Performance** — ~~parallelize training via multiprocessing~~ (done). Profile remaining bottlenecks (battlefield physics, sensor calculations at scale).
 
 ### Next Up
-- **Resource system** — passive income, recycling, battlefield drops, auto-spawn
+- ~~**Resource system** — passive income, manual spawn buttons, destroy oldest generation, generation numbers on bots~~ (done)
+- **Battlefield drops** — destroyed enemy robots drop partial resource value, collected by gatherer bots
 - **Battlefield & combat** — autonomous fighting, wall breach, win condition polish
 - **Scanning & arms race** — scan enemies, use as training dummies
 

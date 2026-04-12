@@ -27,7 +27,10 @@ import settings
 
 # --- Lightweight physics for small arenas (avoids NumPy overhead) -----------
 
-def _simple_sensor_readings(robots: list[Robot]) -> list[np.ndarray | None]:
+def _simple_sensor_readings(robots: list[Robot],
+                            friendly_base_pos: np.ndarray | None = None,
+                            enemy_base_pos: np.ndarray | None = None,
+                            ) -> list[np.ndarray | None]:
     """Simple O(N*S*N) sensor readings — faster than NumPy for N<30."""
     results: list[np.ndarray | None] = [None] * len(robots)
     for i, robot in enumerate(robots):
@@ -124,11 +127,19 @@ def _simple_sensor_readings(robots: list[Robot]) -> list[np.ndarray | None]:
             b.block_type == BlockType.BEACON for b in robot.blocks
         )
         if has_beacon:
-            # Virtual base positions: friendly at left, enemy at right (for team 0)
-            friendly_base = np.array([0.0, 200.0], dtype=np.float32)
-            enemy_base = np.array([800.0, 200.0], dtype=np.float32)
-            if robot.team == 1:
-                friendly_base, enemy_base = enemy_base, friendly_base
+            # Use passed-in base positions (set by TrainingArena per player)
+            if friendly_base_pos is not None and enemy_base_pos is not None:
+                if robot.team == 0:
+                    friendly_base = friendly_base_pos
+                    enemy_base = enemy_base_pos
+                else:
+                    friendly_base = enemy_base_pos
+                    enemy_base = friendly_base_pos
+            else:
+                friendly_base = np.array([0.0, 200.0], dtype=np.float32)
+                enemy_base = np.array([800.0, 200.0], dtype=np.float32)
+                if robot.team == 1:
+                    friendly_base, enemy_base = enemy_base, friendly_base
             for base_pos in (enemy_base, friendly_base):
                 dx = base_pos[0] - robot.pos[0]
                 dy = base_pos[1] - robot.pos[1]
@@ -346,6 +357,18 @@ class TrainingArena:
         self.width = settings.TRAINING_ZONE_SIM_WIDTH
         self.height = settings.TRAINING_ZONE_SIM_HEIGHT
 
+        # Base positions matching the game layout for this player
+        base_margin = 60.0
+        cy = self.height * 0.5
+        left_base = np.array([base_margin, cy], dtype=np.float32)
+        right_base = np.array([self.width - base_margin, cy], dtype=np.float32)
+        if player_id == 0:
+            self.friendly_base_pos = left_base
+            self.enemy_base_pos = right_base
+        else:
+            self.friendly_base_pos = right_base
+            self.enemy_base_pos = left_base
+
         # Per-slot state
         self.populations: dict[int, Population] = {}
         self.best_brains: dict[int, Brain | None] = {}
@@ -428,11 +451,15 @@ class TrainingArena:
         pop = self.population
         n_students = min(settings.TRAINING_STUDENT_COUNT, pop.size)
 
+        # Facing angles: students face toward enemy base, enemies face toward friendly base
+        student_angle = 0.0 if self.player_id == 0 else math.pi
+        enemy_angle = math.pi if self.player_id == 0 else 0.0
+
         # Spawn students
         for i in range(n_students):
             pos = self._random_spawn_pos(team=0)
             robot = Robot(
-                pos=pos, angle=0.0, team=0,
+                pos=pos, angle=student_angle, team=0,
                 blueprint=bp,
                 brain=pop.brains[i].copy(),
             )
@@ -446,7 +473,7 @@ class TrainingArena:
                 pos = self._random_spawn_pos(team=1)
                 brain = self._get_sparring_brain(enemy_slot, enemy_bp)
                 robot = Robot(
-                    pos=pos, angle=math.pi, team=1,
+                    pos=pos, angle=enemy_angle, team=1,
                     blueprint=enemy_bp, brain=brain,
                 )
                 self.sparring.append(robot)
@@ -459,7 +486,7 @@ class TrainingArena:
                 pos = self._random_spawn_pos(team=0)
                 brain = self._get_sparring_brain(friend_slot, friend_bp)
                 robot = Robot(
-                    pos=pos, angle=0.0, team=0,
+                    pos=pos, angle=student_angle, team=0,
                     blueprint=friend_bp, brain=brain,
                 )
                 self.sparring.append(robot)
@@ -484,21 +511,26 @@ class TrainingArena:
         margin = 30.0
         # spawn_distance: 0=close, 1=medium, 2=far
         sd = self.config.spawn_distance
-        # Team 0 (students) on left, team 1 (enemies) on right
-        # Ranges narrow as spawn_distance decreases
+        # Team 0 (students) near friendly base, team 1 (enemies) near enemy base
+        # For player 0: students left, enemies right
+        # For player 1: students right, enemies left
         if sd == 0:    # close: both teams near center
-            t0_lo, t0_hi = 0.3, 0.45
-            t1_lo, t1_hi = 0.55, 0.7
+            friendly_lo, friendly_hi = 0.3, 0.45
+            enemy_lo, enemy_hi = 0.55, 0.7
         elif sd == 1:  # medium
-            t0_lo, t0_hi = 0.15, 0.4
-            t1_lo, t1_hi = 0.6, 0.85
+            friendly_lo, friendly_hi = 0.15, 0.4
+            enemy_lo, enemy_hi = 0.6, 0.85
         else:          # far (original)
-            t0_lo, t0_hi = 0.04, 0.4
-            t1_lo, t1_hi = 0.6, 0.96
+            friendly_lo, friendly_hi = 0.04, 0.4
+            enemy_lo, enemy_hi = 0.6, 0.96
+        # Flip sides for player 1
+        if self.player_id == 1:
+            friendly_lo, friendly_hi, enemy_lo, enemy_hi = \
+                1.0 - friendly_hi, 1.0 - friendly_lo, 1.0 - enemy_hi, 1.0 - enemy_lo
         if team == 0:
-            x = np.random.uniform(self.width * t0_lo + margin, self.width * t0_hi)
+            x = np.random.uniform(self.width * friendly_lo + margin, self.width * friendly_hi)
         else:
-            x = np.random.uniform(self.width * t1_lo, self.width * t1_hi - margin)
+            x = np.random.uniform(self.width * enemy_lo, self.width * enemy_hi - margin)
         y = np.random.uniform(margin, self.height - margin)
         return np.array([x, y], dtype=np.float32)
 
@@ -517,7 +549,8 @@ class TrainingArena:
             self._end_generation()
             return
 
-        sensor_results = _simple_sensor_readings(alive_all)
+        sensor_results = _simple_sensor_readings(
+            alive_all, self.friendly_base_pos, self.enemy_base_pos)
         for i, robot in enumerate(alive_all):
             if sensor_results[i] is not None:
                 robot.think(sensor_results[i])
@@ -537,9 +570,8 @@ class TrainingArena:
         # Accumulate distances for fitness
         alive_enemies = [r for r in self.sparring if r.alive and r.team != 0]
         alive_friends = [r for r in self.sparring if r.alive and r.team == 0]
-        # Virtual base positions (team 0 students: friendly=left, enemy=right)
-        enemy_base_pos = np.array([float(w), float(h) * 0.5], dtype=np.float32)
-        friend_base_pos = np.array([0.0, float(h) * 0.5], dtype=np.float32)
+        enemy_base_pos = self.enemy_base_pos
+        friend_base_pos = self.friendly_base_pos
         for s in self.students:
             if not s.alive:
                 continue
@@ -749,6 +781,10 @@ def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connec
                     'robots': _pack_robots(arena),
                     'bullets': _pack_bullets(arena),
                     'resources': _pack_resources(arena),
+                    'friendly_base': (float(arena.friendly_base_pos[0]),
+                                      float(arena.friendly_base_pos[1])),
+                    'enemy_base': (float(arena.enemy_base_pos[0]),
+                                   float(arena.enemy_base_pos[1])),
                 }
                 if gen_changed:
                     last_gen = arena.generation
@@ -817,6 +853,18 @@ class TrainingZoneProxy:
         self.height = settings.TRAINING_ZONE_SIM_HEIGHT
         self._conn = conn
 
+        # Base positions (initialized to match player side, updated from snapshots)
+        base_margin = 60.0
+        cy = self.height * 0.5
+        left_base = np.array([base_margin, cy], dtype=np.float32)
+        right_base = np.array([self.width - base_margin, cy], dtype=np.float32)
+        if player_id == 0:
+            self.friendly_base_pos = left_base
+            self.enemy_base_pos = right_base
+        else:
+            self.friendly_base_pos = right_base
+            self.enemy_base_pos = left_base
+
         # Cached render state
         self._robots: list[_RenderRobot] = []
         self._bullets: list[_RenderBullet] = []
@@ -883,6 +931,13 @@ class TrainingZoneProxy:
     def _apply_snapshot(self, snapshot: dict):
         self._stats = snapshot['stats']
 
+        if 'friendly_base' in snapshot:
+            fb = snapshot['friendly_base']
+            self.friendly_base_pos = np.array([fb[0], fb[1]], dtype=np.float32)
+        if 'enemy_base' in snapshot:
+            eb = snapshot['enemy_base']
+            self.enemy_base_pos = np.array([eb[0], eb[1]], dtype=np.float32)
+
         if 'best_brain' in snapshot:
             bd = snapshot['best_brain']
             self._best_brains[bd['slot']] = bd
@@ -924,7 +979,14 @@ class TrainingZoneProxy:
 class TrainingZoneUI:
     """Handles player input for training zone configuration during match."""
 
-    # Column 0: config rows
+    # Column 0: spawn rows
+    ROW_SPAWN_0 = 0
+    ROW_SPAWN_1 = 1
+    ROW_SPAWN_2 = 2
+    ROW_DESTROY = 3
+    NUM_SPAWN_ROWS = 4
+
+    # Column 1: config rows
     ROW_DESIGN = 0
     ROW_ENEMY_TYPE = 1
     ROW_ENEMY_COUNT = 2
@@ -934,10 +996,20 @@ class TrainingZoneUI:
     ROW_SPAWN_DIST = 6
     NUM_CONFIG_ROWS = 7
 
-    # Column 1: fitness rows (indexed from 0 within the column)
+    # Column 2: fitness rows (indexed from 0 within the column)
     NUM_FITNESS_ROWS = len(FITNESS_PARAMS)
 
+    NUM_COLUMNS = 3
+
     SPAWN_DIST_LABELS = ['Close', 'Medium', 'Far']
+
+    # Labels for spawn column
+    SPAWN_LABELS = [
+        'Spawn Bot 1',
+        'Spawn Bot 2',
+        'Spawn Bot 3',
+        'Destroy old',
+    ]
 
     # Labels for config column
     CONFIG_LABELS = [
@@ -956,10 +1028,16 @@ class TrainingZoneUI:
     def __init__(self, player_id: int, blueprints: list[RobotBlueprint]):
         self.player_id = player_id
         self.blueprints = blueprints
-        self.cursor_col = 0   # 0=config, 1=fitness
+        self.cursor_col = 0   # 0=spawn, 1=config, 2=fitness
         self.cursor_row = 0
         self.config = TrainingZoneConfig()
         self._config_dirty = True
+
+        # Command queue for spawn/destroy actions (polled by Game)
+        self.commands: list[tuple] = []  # ('spawn', slot) or ('destroy',)
+
+        # Per-player resource state (set by Game each frame for display)
+        self.resources: float = 0.0
 
         # Find first valid slot
         for i in range(3):
@@ -978,7 +1056,8 @@ class TrainingZoneUI:
         pk = settings.PLAYER_KEYS[self.player_id]
         changed = False
 
-        max_row = self.NUM_CONFIG_ROWS - 1 if self.cursor_col == 0 else self.NUM_FITNESS_ROWS - 1
+        max_rows = [self.NUM_SPAWN_ROWS - 1, self.NUM_CONFIG_ROWS - 1, self.NUM_FITNESS_ROWS - 1]
+        max_row = max_rows[self.cursor_col]
 
         if self._key_event(keys_pressed, pk['up']):
             self.cursor_row = max(0, self.cursor_row - 1)
@@ -986,12 +1065,12 @@ class TrainingZoneUI:
             self.cursor_row = min(max_row, self.cursor_row + 1)
         if self._key_event(keys_pressed, pk['left']):
             if self.cursor_col > 0:
-                self.cursor_col = 0
-                self.cursor_row = min(self.cursor_row, self.NUM_CONFIG_ROWS - 1)
+                self.cursor_col -= 1
+                self.cursor_row = min(self.cursor_row, max_rows[self.cursor_col])
         if self._key_event(keys_pressed, pk['right']):
-            if self.cursor_col < 1:
-                self.cursor_col = 1
-                self.cursor_row = min(self.cursor_row, self.NUM_FITNESS_ROWS - 1)
+            if self.cursor_col < self.NUM_COLUMNS - 1:
+                self.cursor_col += 1
+                self.cursor_row = min(self.cursor_row, max_rows[self.cursor_col])
 
         if self._key_event(keys_pressed, pk['primary']):
             changed = self._adjust(+1)
@@ -1020,7 +1099,7 @@ class TrainingZoneUI:
         row = self.cursor_row
         cfg = self.config
 
-        if self.cursor_col == 1:
+        if self.cursor_col == 2:
             # Fitness column
             if row < len(FITNESS_PARAMS):
                 key, _label, default, lo, hi, step = FITNESS_PARAMS[row]
@@ -1031,7 +1110,23 @@ class TrainingZoneUI:
                     return True
             return False
 
-        # Config column
+        if self.cursor_col == 0:
+            # Spawn column
+            if row in (self.ROW_SPAWN_0, self.ROW_SPAWN_1, self.ROW_SPAWN_2):
+                if direction > 0:
+                    slot = row - self.ROW_SPAWN_0
+                    if self.blueprints[slot].blocks:
+                        cost = len(self.blueprints[slot].blocks) * settings.SPAWN_COST_PER_BLOCK
+                        if self.resources >= cost:
+                            self.commands.append(('spawn', slot))
+                return False
+            elif row == self.ROW_DESTROY:
+                if direction > 0:
+                    self.commands.append(('destroy',))
+                return False
+            return False
+
+        # Config column (col 1)
         if row == self.ROW_DESIGN:
             return self._cycle_slot('active_slot', direction)
 
@@ -1085,6 +1180,21 @@ class TrainingZoneUI:
             setattr(self.config, attr, new_slot)
             return True
         return False
+
+    def get_spawn_value_str(self, row: int) -> str:
+        """Get display string for a spawn column row."""
+        if row in (self.ROW_SPAWN_0, self.ROW_SPAWN_1, self.ROW_SPAWN_2):
+            slot = row - self.ROW_SPAWN_0
+            bp = self.blueprints[slot]
+            if not bp.blocks:
+                return "(empty)"
+            cost = len(bp.blocks) * settings.SPAWN_COST_PER_BLOCK
+            affordable = self.resources >= cost
+            tag = "[E]" if affordable else ""
+            return f"${cost} {tag}"
+        elif row == self.ROW_DESTROY:
+            return "[E]"
+        return ""
 
     def get_config_value_str(self, row: int) -> str:
         """Get display string for a config column row."""
@@ -1178,6 +1288,17 @@ class TrainingManager:
 
     def get_ui(self, player_id: int) -> TrainingZoneUI:
         return self.uis[player_id]
+
+    def poll_commands(self, player_id: int) -> list[tuple]:
+        """Drain and return pending spawn/destroy commands for a player."""
+        ui = self.uis[player_id]
+        cmds = list(ui.commands)
+        ui.commands.clear()
+        return cmds
+
+    def set_resources(self, player_id: int, amount: float):
+        """Update the resource display for a player's UI."""
+        self.uis[player_id].resources = amount
 
     def stop(self):
         for zone in self.zones:
