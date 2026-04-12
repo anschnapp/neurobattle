@@ -121,7 +121,7 @@ def _simple_sensor_readings(robots: list[Robot]) -> list[np.ndarray | None]:
 
         # --- Beacon: enemy base + friendly base ---
         has_beacon = any(
-            b.block_type == BlockType.BEACON and b.alive for b in robot.blocks
+            b.block_type == BlockType.BEACON for b in robot.blocks
         )
         if has_beacon:
             # Virtual base positions: friendly at left, enemy at right (for team 0)
@@ -269,7 +269,7 @@ def _simple_gather_resources(robots: list[Robot], resources: list[_ResourceDrop]
         for robot in robots:
             if not robot.alive:
                 continue
-            gatherer_blocks = [b for b in robot.blocks if b.block_type == BlockType.GATHERER and b.alive]
+            gatherer_blocks = [b for b in robot.blocks if b.block_type == BlockType.GATHERER]
             if not gatherer_blocks:
                 continue
             dx = robot.pos[0] - res.pos[0]
@@ -306,7 +306,7 @@ def _simple_scan_enemies(robots: list[Robot]):
         if not robot.alive:
             continue
         scanner_blocks = [b for b in robot.blocks
-                          if b.block_type == BlockType.SCANNER and b.alive
+                          if b.block_type == BlockType.SCANNER
                           and b.scan_cooldown <= 0]
         if not scanner_blocks:
             continue
@@ -557,7 +557,7 @@ class TrainingArena:
         hits = _simple_bullet_collisions(self.bullets, alive_all)
         for bi, target, bpos in hits:
             shooter_team = self.bullets[bi].team
-            target.take_damage_at(bpos, self.bullets[bi].damage)
+            target.take_damage(self.bullets[bi].damage)
 
             if shooter_team == 0 and target.team == 1:
                 self._credit_hit(bpos, 'hit_enemy')
@@ -678,9 +678,10 @@ _SNAPSHOT_MIN_INTERVAL = 0.03  # ~30fps worth of render data
 def _pack_robots(arena: TrainingArena) -> list[tuple]:
     result = []
     for r in arena.students + arena.sparring:
-        blocks = [(b.grid_x, b.grid_y, b.block_type.value, b.alive, b.hp, b.max_hp)
+        blocks = [(b.grid_x, b.grid_y, b.block_type.value, True, 1.0, 1.0)
                   for b in r.blocks]
-        result.append((r.pos[0], r.pos[1], r.angle, r.team, r.alive, blocks))
+        result.append((r.pos[0], r.pos[1], r.angle, r.team, r.alive, blocks,
+                        r.hp, r.max_hp))
     return result
 
 
@@ -783,9 +784,6 @@ class _RenderBlock:
     grid_x: int
     grid_y: int
     block_type: BlockType
-    alive: bool
-    hp: float = 1.0
-    max_hp: float = 1.0
 
 
 @dataclass
@@ -890,10 +888,11 @@ class TrainingZoneProxy:
             self._best_brains[bd['slot']] = bd
 
         self._robots = []
-        for (x, y, angle, team, alive, blocks_data) in snapshot['robots']:
+        for robot_data in snapshot['robots']:
+            x, y, angle, team, alive, blocks_data = robot_data[:6]
             blocks = [
-                _RenderBlock(gx, gy, BlockType(bt), ba, hp, max_hp)
-                for gx, gy, bt, ba, hp, max_hp in blocks_data
+                _RenderBlock(gx, gy, BlockType(bt))
+                for gx, gy, bt, *_ in blocks_data
             ]
             self._robots.append(_RenderRobot(
                 pos=np.array([x, y], dtype=np.float32),

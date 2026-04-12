@@ -313,7 +313,7 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
 
         # --- Beacon: enemy base + friendly base (order must match training) ---
         has_beacon = any(
-            b.block_type == BlockType.BEACON and b.alive for b in robot.blocks
+            b.block_type == BlockType.BEACON for b in robot.blocks
         )
         if has_beacon:
             # Sort: enemy base first, then friendly base

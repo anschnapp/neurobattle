@@ -21,6 +21,8 @@ class Robot:
     brain: Brain
     blocks: list[Block] = field(default_factory=list)
     alive: bool = True
+    hp: float = 0.0
+    max_hp: float = 0.0
     velocity: np.ndarray = field(default=None)
     # Fitness tracking
     hits_dealt: int = 0
@@ -40,6 +42,10 @@ class Robot:
             self.velocity = np.zeros(2, dtype=np.float32)
         if not self.blocks:
             self.blocks = self.blueprint.copy_blocks()
+        # Initialize HP pool from blocks (armor counts double)
+        if self.max_hp == 0.0:
+            self.max_hp = sum(b.hp_contribution for b in self.blocks)
+            self.hp = self.max_hp
 
     @property
     def radius(self) -> float:
@@ -52,14 +58,6 @@ class Robot:
             if dist > max_r:
                 max_r = dist
         return max_r
-
-    @property
-    def hp(self) -> float:
-        return sum(b.hp for b in self.blocks if b.alive)
-
-    @property
-    def max_hp(self) -> float:
-        return sum(b.max_hp for b in self.blocks)
 
     def get_block_world_pos(self, block: Block) -> np.ndarray:
         """Get the world position of a block, accounting for robot rotation."""
@@ -86,8 +84,7 @@ class Robot:
 
         idx = 0
 
-        # Apply engine outputs: iterate ALL engine blocks to keep output index stable.
-        # Dead engines consume their slot but produce no thrust.
+        # Apply engine outputs
         accel_x, accel_y = 0.0, 0.0
         for block in self.blocks:
             if block.block_type != BlockType.ENGINE:
@@ -95,8 +92,6 @@ class Robot:
             if idx < len(outputs):
                 thrust_signal = outputs[idx]
                 idx += 1
-                if not block.alive:
-                    continue  # slot consumed, no effect
                 world_angle = self.get_block_world_angle(block)
                 push_angle = world_angle + math.pi
                 accel_x += math.cos(push_angle) * thrust_signal * block.thrust
@@ -137,32 +132,17 @@ class Robot:
         # Friction
         self.velocity *= 0.95
 
-        # Tick all blocks
+        # Tick all blocks (cooldowns)
         for block in self.blocks:
             block.tick()
 
-        # Check if robot is dead (all blocks destroyed)
-        if not any(b.alive for b in self.blocks):
+    def take_damage(self, amount: float):
+        """Subtract damage from the robot's HP pool."""
+        self.hp -= amount
+        self.hits_taken += 1
+        if self.hp <= 0:
+            self.hp = 0
             self.alive = False
-
-    def take_damage_at(self, world_pos: np.ndarray, amount: float):
-        """Damage the block closest to world_pos."""
-        best_block = None
-        best_dist = float('inf')
-        for block in self.blocks:
-            if not block.alive:
-                continue
-            bpos = self.get_block_world_pos(block)
-            dist = np.linalg.norm(bpos - world_pos)
-            if dist < best_dist:
-                best_dist = dist
-                best_block = block
-
-        if best_block is not None:
-            best_block.take_damage(amount)
-            self.hits_taken += 1
-            if not any(b.alive for b in self.blocks):
-                self.alive = False
 
     def try_shoot(self) -> list[Bullet]:
         """Fire from all weapons that want to shoot. Returns list of bullets."""
@@ -171,7 +151,7 @@ class Robot:
 
         bullets = []
         for block, wants_fire in getattr(self, '_weapon_signals', []):
-            if not wants_fire or not block.alive:
+            if not wants_fire:
                 continue
             if block.cooldown > 0:
                 continue

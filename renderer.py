@@ -98,9 +98,6 @@ class Renderer:
         half = BLOCK_PIXEL_SIZE / 2
 
         for block in robot.blocks:
-            if not block.alive:
-                continue
-
             local_x = block.grid_x * BLOCK_PIXEL_SIZE
             local_y = block.grid_y * BLOCK_PIXEL_SIZE
             wx = robot.pos[0] + cos_a * local_x - sin_a * local_y + ox
@@ -124,9 +121,6 @@ class Renderer:
                 (bg + tg) // 2,
                 (bb + tb) // 2,
             )
-
-            hp_frac = block.hp / block.max_hp
-            color = tuple(int(c * (0.3 + 0.7 * hp_frac)) for c in color)
 
             pygame.draw.polygon(self.screen, color, corners_world)
             pygame.draw.polygon(self.screen, settings.WHITE, corners_world, 1)
@@ -367,9 +361,6 @@ class Renderer:
             half = BLOCK_PIXEL_SIZE / 2 * scale
 
             for block in robot.blocks:
-                if not block.alive:
-                    continue
-
                 local_x = block.grid_x * BLOCK_PIXEL_SIZE * scale
                 local_y = block.grid_y * BLOCK_PIXEL_SIZE * scale
                 wx = robot.pos[0] * scale + ox + cos_a * local_x - sin_a * local_y
@@ -389,8 +380,5 @@ class Renderer:
                 br, bg, bb = base_color
                 tr, tg, tb = team_color
                 color = ((br + tr) // 2, (bg + tg) // 2, (bb + tb) // 2)
-
-                hp_frac = block.hp / block.max_hp
-                color = tuple(int(c * (0.3 + 0.7 * hp_frac)) for c in color)
 
                 pygame.draw.polygon(self.screen, color, corners_world)

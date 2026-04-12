@@ -43,7 +43,7 @@ Players assemble robots from small modular blocks. Each block adds to the robot'
 
 ### Module Types
 
-- **Armor / Body** — structural blocks, determines durability
+- **Armor / Body** — structural blocks, contributes 2× HP to the robot's health pool
 - **Engine** — movement speed and maneuverability. No engine = can't move.
 - **Weapon** — shooting device
 - **Sensor** — perception modules (see Sensor Types below). No sensor = blind.
@@ -51,6 +51,10 @@ Players assemble robots from small modular blocks. Each block adds to the robot'
 - **Gatherer** — magnetically collects resources from the battlefield in an area around the robot (dropped resources fly toward the gatherer like a magnet)
 - **Radar** — omnidirectional radar: each radar block detects the Nth nearest enemy (angle + distance) and Nth nearest friend (angle + distance). First radar = closest, second radar = 2nd closest, etc. Adds 4 brain inputs per block. No range limit — works across the entire arena.
 - **Beacon** — base compass: detects enemy base (angle + distance) and friendly base (angle + distance). Adds 4 brain inputs. Max 1 per robot. Omnidirectional, unlimited range.
+
+### Damage & Health
+
+Robots use a **single HP pool** — no per-block damage. Every block contributes 20 HP to the pool, except Armor (PLAIN) blocks which contribute 40 HP (double). When HP reaches zero the robot dies. All modules remain fully functional until death — sensors, engines, weapons, radars all work at full capacity the entire time. This keeps the neural network's input/output contract stable throughout combat, which is critical for small GA-evolved brains that can't adapt to degraded modules mid-fight.
 
 ### Design Constraints
 

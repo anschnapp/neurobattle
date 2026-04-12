@@ -198,7 +198,7 @@ class Game:
         for bi, ri, bpos in hits:
             if bi in hit_bullet_indices:
                 continue
-            self.robots[ri].take_damage_at(bpos, self.bullets[bi].damage)
+            self.robots[ri].take_damage(self.bullets[bi].damage)
             self.bullets[bi].alive = False
             hit_bullet_indices.add(bi)
 

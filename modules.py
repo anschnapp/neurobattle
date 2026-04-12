@@ -51,9 +51,7 @@ class Block:
     grid_y: int
     block_type: BlockType = BlockType.PLAIN
     direction: Direction = Direction.RIGHT  # facing direction for directional modules
-    hp: float = 20.0
-    max_hp: float = 20.0
-    alive: bool = True
+    alive: bool = True  # always True; kept for rendering compatibility
 
     # Weapon state
     cooldown: int = 0
@@ -79,11 +77,13 @@ class Block:
         if self.scan_cooldown > 0:
             self.scan_cooldown -= 1
 
-    def take_damage(self, amount: float):
-        self.hp -= amount
-        if self.hp <= 0:
-            self.hp = 0
-            self.alive = False
+    @property
+    def hp_contribution(self) -> float:
+        """HP this block contributes to the robot. Armor (PLAIN) counts double."""
+        base_hp = 20.0
+        if self.block_type == BlockType.PLAIN:
+            return base_hp * 2
+        return base_hp
 
 
 # --- Block size for rendering ---
@@ -110,27 +110,27 @@ class RobotBlueprint:
 
     @property
     def engines(self) -> list[Block]:
-        return [b for b in self.blocks if b.block_type == BlockType.ENGINE and b.alive]
+        return [b for b in self.blocks if b.block_type == BlockType.ENGINE]
 
     @property
     def weapons(self) -> list[Block]:
-        return [b for b in self.blocks if b.block_type == BlockType.WEAPON and b.alive]
+        return [b for b in self.blocks if b.block_type == BlockType.WEAPON]
 
     @property
     def sensors(self) -> list[Block]:
-        return [b for b in self.blocks if b.block_type == BlockType.SENSOR and b.alive]
+        return [b for b in self.blocks if b.block_type == BlockType.SENSOR]
 
     @property
     def scanners(self) -> list[Block]:
-        return [b for b in self.blocks if b.block_type == BlockType.SCANNER and b.alive]
+        return [b for b in self.blocks if b.block_type == BlockType.SCANNER]
 
     @property
     def radars(self) -> list[Block]:
-        return [b for b in self.blocks if b.block_type == BlockType.RADAR and b.alive]
+        return [b for b in self.blocks if b.block_type == BlockType.RADAR]
 
     @property
     def alive_blocks(self) -> list[Block]:
-        return [b for b in self.blocks if b.alive]
+        return list(self.blocks)
 
     @property
     def brain_input_size(self) -> int:
@@ -191,7 +191,6 @@ class RobotBlueprint:
             Block(
                 grid_x=b.grid_x, grid_y=b.grid_y,
                 block_type=b.block_type, direction=b.direction,
-                hp=b.max_hp, max_hp=b.max_hp, alive=True,
                 fire_rate=b.fire_rate, bullet_speed=b.bullet_speed,
                 bullet_damage=b.bullet_damage, thrust=b.thrust,
                 sensor_range=b.sensor_range, sensor_fov=b.sensor_fov,
