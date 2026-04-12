@@ -541,6 +541,8 @@ def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connec
 
         last_gen = -1
         last_snapshot_time = 0.0
+        tick_interval = 1.0 / (settings.FPS * settings.TRAINING_TICKS_PER_FRAME)
+        last_tick_time = time.monotonic()
 
         while True:
             # Check for commands (non-blocking)
@@ -556,6 +558,13 @@ def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connec
                 elif isinstance(cmd, tuple) and cmd[0] == 'config':
                     new_config = TrainingZoneConfig.from_dict(cmd[1])
                     arena.apply_config(new_config)
+
+            # Rate-limit to 3x game speed (FPS * TRAINING_TICKS_PER_FRAME ticks/sec)
+            now = time.monotonic()
+            sleep_time = tick_interval - (now - last_tick_time)
+            if sleep_time > 0.001:
+                time.sleep(sleep_time)
+            last_tick_time = time.monotonic()
 
             # Run one tick
             arena.tick()
