@@ -51,9 +51,8 @@ class Game:
         self.bullets: list[Bullet] = []
         self.player_blueprints: list[list[RobotBlueprint]] = [[], []]
         self.training: TrainingManager | None = None
+        self.training_started = False  # True after 15s setup period
         self.frame_count = 0
-        # Cached surfaces for training strips (avoid redrawing every frame)
-        self.training_surfaces: list[pygame.Surface | None] = [None, None]
 
     def run(self):
         running = True
@@ -137,8 +136,18 @@ class Game:
     def _update_match(self):
         self.tick += 1
 
-        # Tick training arenas (runs multiple ticks per frame)
+        # Training zone management
         if self.training is not None:
+            # Handle player input for training config
+            keys = pygame.key.get_pressed()
+            self.training.handle_input(keys)
+
+            # 15-second setup period — resume training once elapsed
+            if not self.training_started and self.tick >= settings.TRAINING_SETUP_TICKS:
+                self.training_started = True
+                self.training.resume_training()
+
+            # Poll worker snapshots
             self.training.tick()
 
         # Robot AI: batch sensor readings, then think
@@ -230,29 +239,16 @@ class Game:
         if self.winner is not None:
             self.renderer.draw_game_over(self.winner)
 
-        # Draw training arenas (cached, only redrawn periodically)
+        # Draw training zones
         if self.training is not None:
-            self.frame_count += 1
-            redraw = (self.frame_count % settings.TRAINING_RENDER_INTERVAL == 0)
+            setup_remaining = max(0, settings.TRAINING_SETUP_TICKS - self.tick)
             for player_id in range(2):
-                if redraw or self.training_surfaces[player_id] is None:
-                    surf = pygame.Surface(
-                        (settings.SCREEN_WIDTH, settings.TRAINING_STRIP_HEIGHT)
-                    )
-                    surf.fill(settings.DARK_GRAY)
-                    # Temporarily swap screen to draw into surface
-                    old_screen = self.renderer.screen
-                    self.renderer.screen = surf
-                    strip_y = 0  # draw at top of surface
-                    self.renderer.draw_training_strip(
-                        player_id, self.training.arenas[player_id],
-                        override_y=0,
-                    )
-                    self.renderer.screen = old_screen
-                    self.training_surfaces[player_id] = surf
-                # Blit cached surface
-                dest_y = 0 if player_id == 0 else (settings.SCREEN_HEIGHT - settings.TRAINING_STRIP_HEIGHT)
-                self.screen.blit(self.training_surfaces[player_id], (0, dest_y))
+                self.renderer.draw_training_zone(
+                    player_id,
+                    self.training.get_zone(player_id),
+                    self.training.get_ui(player_id),
+                    setup_remaining=setup_remaining,
+                )
 
 
 if __name__ == "__main__":

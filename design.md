@@ -102,9 +102,11 @@ Training is free (no resource cost). Each player has a **single training zone** 
 ### Training Zone
 
 - The zone is isolated — hard borders, no connection to the battlefield.
-- Spans the full width of the screen, giving more space than the old per-design arenas.
-- Shows an indicator of which design is currently training and its generation count.
-- Has slider controls for configuring fitness function weights and sparring partner counts.
+- Layout: config panel on the left (350px), arena viewport on the right (remaining width).
+- Config panel shows: active design selector, enemy/friend sparring type and count, resource drop count, and 6 fitness weight sliders. Player navigates rows with up/down, adjusts values with primary/secondary.
+- Arena viewport shows the simulation with stats overlay (generation, fitness, alive count).
+- Per-slot generation counts are displayed so the player can see progress on all 3 designs.
+- **Resource injection:** The player can configure how many resource drops (0-20) spawn each generation. This allows training pure gatherers without needing the full battlefield resource system — bots evolve to magnetically collect yellow drops via GATHERER blocks.
 
 ### Training Flow
 
@@ -243,15 +245,14 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports
 - `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs, live network visualization with input/output labels, hidden size selector with suggestions, param count)
 - `main.py` — game loop with ASSEMBLY → MATCH phase state machine
-- `training.py` — training arenas (isolated sim per design), fitness evaluation (hit_enemy/survival/damage_taken), evolution loop, rendered in top/bottom strips with cached surfaces. Uses lightweight pure-Python physics (no NumPy overhead for small entity counts). Each arena runs in its own subprocess via `multiprocessing` (spawn context to avoid pygame/SDL fork issues). Workers tick at full CPU speed and send render snapshots + best brains back through Pipes. Main process holds lightweight proxy objects (duck-type compatible with the renderer).
+- `training.py` — single training zone per player with configurable sparring and fitness. One zone trains one design at a time with hot-swap (populations preserved per design). Zone runs in its own subprocess via `multiprocessing` (spawn context). Worker ticks at full CPU speed, sends render snapshots + best brains through Pipes, receives config updates. Main process holds `TrainingZoneProxy` (render data) + `TrainingZoneUI` (player input handling with cursor navigation and key repeat). Config panel on left (350px), arena viewport on right. Lightweight pure-Python physics for small entity counts. **Training zone config:** active design selector, enemy sparring type/count, friend sparring type/count, resource drop count (for gatherer training), 6 fitness weight sliders (hit enemy, hit friend, survival, damage taken, distance to enemy, collect resources). 15-second setup period at match start (training paused, player configures). Resource drops are yellow collectibles gathered magnetically by GATHERER blocks.
 
 ### Needs Rework
-- **Training system** — restructure from 3 arenas per player to 1 training zone per player. Wider zone (full screen width), single active design with hot-swap, 15s setup delay at match start, generation count indicator.
+- ~~**Training system** — restructure from 3 arenas per player to 1 training zone per player. Wider zone (full screen width), single active design with hot-swap, 15s setup delay at match start, generation count indicator.~~ (done)
 - ~~**Assembly screen** — add hidden layer size selector per design, add live network visualization (inputs/hidden/outputs with connection lines), auto-derive input/output counts from placed modules.~~ (done)
 - **Performance** — ~~parallelize training via multiprocessing~~ (done). Profile remaining bottlenecks (battlefield physics, sensor calculations at scale).
 
 ### Next Up
-- **Training UI polish** — fitness weight sliders, sparring partner config within the single zone
 - **Resource system** — passive income, recycling, battlefield drops, auto-spawn
 - **Battlefield & combat** — autonomous fighting, wall breach, win condition polish
 - **Scanning & arms race** — scan enemies, use as training dummies
@@ -266,9 +267,8 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 
 ### Performance Strategy
 
-- **Parallelization (implemented):** Each training arena runs in its own subprocess via `multiprocessing` with `spawn` context (required to avoid forking pygame/SDL state). Workers tick at full CPU speed independently. Communication via `Pipe`: workers send render snapshots (~30fps) and best brain weights (each generation); main process sends commands (stop/pause/resume). Proxy objects in the main process duck-type match `TrainingArena` so the renderer works unchanged.
+- **Parallelization (implemented):** One training zone per player, each in its own subprocess via `multiprocessing` with `spawn` context. Workers tick at full CPU speed. Communication via `Pipe`: workers send render snapshots (~30fps) and best brain weights (each generation); main process sends commands (stop/pause/resume/config). Two worker processes total (one per player) instead of six.
 - **Profile-first:** Identify actual bottlenecks before optimizing. Likely candidates: battlefield sensor calculations, collision detection at scale.
-- **Single zone benefit:** One zone per player instead of three means fewer concurrent simulations to run, directly reducing CPU load.
 
 ### Why Python
 

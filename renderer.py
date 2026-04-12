@@ -184,104 +184,150 @@ class Renderer:
                           surf.get_height() + padding * 2), 2)
         self.screen.blit(surf, (x, y))
 
-    # --- Training arena rendering -------------------------------------------
+    # --- Training zone rendering ----------------------------------------------
 
-    def draw_training_strip(self, player_id: int, arenas, override_y: int | None = None):
-        """Draw 3 training arenas in a horizontal strip.
+    def draw_training_zone(self, player_id: int, zone, ui, setup_remaining: int = 0,
+                           override_y: int | None = None):
+        """Draw a single training zone: config panel on left, arena viewport on right.
 
-        player_id 0 = top strip, player_id 1 = bottom strip.
-        arenas: list of 3 TrainingArena or None.
-        override_y: if set, draw at this y instead of the default position.
+        zone: TrainingZoneProxy
+        ui: TrainingZoneUI
+        setup_remaining: ticks left in 15s setup period (0 = training active)
         """
+        from training import TrainingZoneUI, FITNESS_PARAMS
+
         if override_y is not None:
             strip_y = override_y
         else:
             strip_y = 0 if player_id == 0 else (settings.SCREEN_HEIGHT - settings.TRAINING_STRIP_HEIGHT)
         strip_h = settings.TRAINING_STRIP_HEIGHT
-
-        # Divider line between training strip and battlefield
-        div_y = strip_y + strip_h if player_id == 0 else strip_y
         team_color = settings.TEAM_COLORS[player_id]
+
+        # Divider line
+        div_y = strip_y + strip_h if player_id == 0 else strip_y
         dim_color = tuple(c // 3 for c in team_color)
         pygame.draw.line(self.screen, dim_color, (0, div_y), (settings.SCREEN_WIDTH, div_y), 2)
 
-        # Player label
-        label = self.font.render(f"P{player_id + 1} TRAINING", True, team_color)
-        self.screen.blit(label, (6, strip_y + 3))
+        # --- Config panel (left side) ---
+        panel_w = settings.TRAINING_CONFIG_PANEL_WIDTH
+        panel_x = 4
+        panel_y = strip_y + 2
 
-        # Layout: 3 arenas across
-        arena_gap = 8
-        total_gap = arena_gap * 4  # gaps on edges + between
-        arena_draw_w = (settings.SCREEN_WIDTH - total_gap) // 3
-        arena_draw_h = strip_h - 24  # leave room for label at top
+        # Header
+        stats = zone.get_stats()
+        gen = stats.get('generation', 0)
+        slot = ui.config.active_slot
+        header = f"P{player_id + 1} TRAINING - Bot {slot + 1} (Gen {gen})"
+        self.screen.blit(self.font.render(header, True, team_color), (panel_x, panel_y))
 
-        for slot in range(3):
-            arena = arenas[slot] if arenas else None
-            ax = arena_gap + slot * (arena_draw_w + arena_gap)
-            ay = strip_y + 20
+        if setup_remaining > 0:
+            secs = setup_remaining // settings.FPS + 1
+            setup_txt = self.font.render(f"SETUP {secs}s", True, settings.YELLOW)
+            self.screen.blit(setup_txt, (panel_x + 260, panel_y))
 
-            # Arena background
-            pygame.draw.rect(self.screen, (20, 20, 28), (ax, ay, arena_draw_w, arena_draw_h))
-            pygame.draw.rect(self.screen, (50, 50, 60), (ax, ay, arena_draw_w, arena_draw_h), 1)
+        # Config rows
+        row_h = 16
+        row_y_start = panel_y + 20
 
-            if arena is None:
-                txt = self.small_font.render("(no design)", True, settings.MID_GRAY)
-                self.screen.blit(txt, (ax + arena_draw_w // 2 - txt.get_width() // 2,
-                                       ay + arena_draw_h // 2 - 6))
+        for row in range(ui.NUM_ROWS):
+            ry = row_y_start + row * row_h
+            if ry + row_h > strip_y + strip_h:
+                break
+
+            is_selected = (row == ui.cursor_row)
+            label = ui.ROW_LABELS[row]
+            value = ui.get_value_str(row)
+
+            # Highlight selected row
+            if is_selected:
+                pygame.draw.rect(self.screen, (40, 40, 60),
+                                 (panel_x, ry, panel_w - 8, row_h))
+                indicator = ">"
+            else:
+                indicator = " "
+
+            label_color = settings.WHITE if is_selected else settings.LIGHT_GRAY
+            value_color = settings.YELLOW if is_selected else settings.WHITE
+
+            # Separator before fitness section
+            if row == ui.ROW_FITNESS_START:
+                sep_y = ry - 2
+                pygame.draw.line(self.screen, settings.MID_GRAY,
+                                 (panel_x, sep_y), (panel_x + panel_w - 12, sep_y), 1)
+
+            txt = f"{indicator} {label}:"
+            self.screen.blit(self.small_font.render(txt, True, label_color), (panel_x, ry + 1))
+            self.screen.blit(self.small_font.render(value, True, value_color),
+                             (panel_x + 140, ry + 1))
+
+            # Show slot generation counts on the design row
+            if row == ui.ROW_DESIGN:
+                slot_gens = stats.get('slot_generations', {})
+                for s in range(3):
+                    sx = panel_x + 200 + s * 50
+                    sg = slot_gens.get(s, 0)
+                    sc = team_color if s == slot else settings.MID_GRAY
+                    slot_txt = f"B{s+1}:G{sg}"
+                    self.screen.blit(self.small_font.render(slot_txt, True, sc), (sx, ry + 1))
+
+        # --- Arena viewport (right side) ---
+        vp_x = panel_w + 4
+        vp_y = strip_y + 4
+        vp_w = settings.SCREEN_WIDTH - panel_w - 8
+        vp_h = strip_h - 8
+
+        # Viewport background
+        pygame.draw.rect(self.screen, (20, 20, 28), (vp_x, vp_y, vp_w, vp_h))
+        pygame.draw.rect(self.screen, (50, 50, 60), (vp_x, vp_y, vp_w, vp_h), 1)
+
+        # Scale from sim coords to viewport
+        scale_x = vp_w / zone.width
+        scale_y = vp_h / zone.height
+        scale = min(scale_x, scale_y)
+        scaled_w = zone.width * scale
+        scaled_h = zone.height * scale
+        ox = vp_x + (vp_w - scaled_w) / 2
+        oy = vp_y + (vp_h - scaled_h) / 2
+
+        # Draw robots
+        self._draw_zone_robots(zone, player_id, ox, oy, scale)
+
+        # Draw bullets
+        for bullet in zone.bullets:
+            if not bullet.alive:
                 continue
+            bx = int(bullet.pos[0] * scale + ox)
+            by = int(bullet.pos[1] * scale + oy)
+            color = settings.TEAM_COLORS[bullet.team]
+            bright = tuple(min(255, c + 80) for c in color)
+            pygame.draw.circle(self.screen, bright, (bx, by), max(1, int(2 * scale)))
 
-            # Scale factor from arena sim coords to draw coords
-            scale_x = arena_draw_w / arena.width
-            scale_y = arena_draw_h / arena.height
-            scale = min(scale_x, scale_y)
-            # Center the arena within the draw rect
-            scaled_w = arena.width * scale
-            scaled_h = arena.height * scale
-            ox = ax + (arena_draw_w - scaled_w) / 2
-            oy = ay + (arena_draw_h - scaled_h) / 2
+        # Draw resource drops
+        for res_pos in zone.resources:
+            rx = int(res_pos[0] * scale + ox)
+            ry = int(res_pos[1] * scale + oy)
+            pygame.draw.circle(self.screen, settings.YELLOW, (rx, ry), max(2, int(3 * scale)))
 
-            # Draw robots (students + sparring) — use raw drawing for speed
-            self._draw_arena_robots(arena, ox, oy, scale)
+        # Stats overlay in viewport
+        fit_txt = f"Best:{stats['best_fitness']:.0f} Avg:{stats['avg_fitness']:.0f}"
+        alive_txt = f"{stats['alive_students']}/{stats['total_students']} alive"
+        tick_txt = f"{stats['gen_tick']}/{settings.TRAINING_TICKS_PER_GENERATION}"
 
-            # Draw bullets
-            for bullet in arena.bullets:
-                if not bullet.alive:
-                    continue
-                bx = int(bullet.pos[0] * scale + ox)
-                by = int(bullet.pos[1] * scale + oy)
-                color = settings.TEAM_COLORS[bullet.team]
-                bright = tuple(min(255, c + 80) for c in color)
-                pygame.draw.circle(self.screen, bright, (bx, by), max(1, int(2 * scale)))
+        self.screen.blit(self.small_font.render(fit_txt, True, settings.GREEN),
+                         (vp_x + 3, vp_y + 2))
+        self.screen.blit(self.small_font.render(alive_txt, True, settings.LIGHT_GRAY),
+                         (vp_x + vp_w - 70, vp_y + 2))
+        self.screen.blit(self.small_font.render(tick_txt, True, settings.MID_GRAY),
+                         (vp_x + vp_w - 55, vp_y + 14))
 
-            # Stats overlay
-            stats = arena.get_stats()
-            gen_txt = f"G:{stats['generation']}"
-            fit_txt = f"Best:{stats['best_fitness']:.0f}"
-            alive_txt = f"{stats['alive_students']}/{stats['total_students']}"
-            tick_txt = f"{stats['gen_tick']}/{settings.TRAINING_TICKS_PER_GENERATION}"
-
-            self.screen.blit(self.small_font.render(gen_txt, True, settings.WHITE),
-                             (ax + 3, ay + 2))
-            self.screen.blit(self.small_font.render(fit_txt, True, settings.GREEN),
-                             (ax + 3, ay + 14))
-            self.screen.blit(self.small_font.render(alive_txt, True, settings.LIGHT_GRAY),
-                             (ax + arena_draw_w - 40, ay + 2))
-            self.screen.blit(self.small_font.render(tick_txt, True, settings.MID_GRAY),
-                             (ax + arena_draw_w - 55, ay + 14))
-
-            # Slot label
-            slot_lbl = self.small_font.render(f"Bot {slot + 1}", True, team_color)
-            self.screen.blit(slot_lbl, (ax + arena_draw_w // 2 - slot_lbl.get_width() // 2,
-                                         ay + arena_draw_h - 14))
-
-    def _draw_arena_robots(self, arena, ox: float, oy: float, scale: float):
-        """Draw robots inside a training arena viewport (scaled)."""
-        for robot in arena.all_robots:
+    def _draw_zone_robots(self, zone, player_id: int, ox: float, oy: float, scale: float):
+        """Draw robots inside a training zone viewport (scaled)."""
+        for robot in zone.all_robots:
             if not robot.alive:
                 continue
 
             is_student = robot.team == 0
-            team_color = settings.TEAM_COLORS[arena.player_id] if is_student else (150, 80, 80)
+            team_color = settings.TEAM_COLORS[player_id] if is_student else (150, 80, 80)
             cos_a = math.cos(robot.angle)
             sin_a = math.sin(robot.angle)
             half = BLOCK_PIXEL_SIZE / 2 * scale

@@ -1,14 +1,11 @@
-"""Training system — isolated arenas where robot brains evolve.
+"""Training system — single zone per player with configurable sparring and fitness.
 
-Each player has 3 training arenas (one per robot design).
-Each arena runs in its own subprocess via multiprocessing:
-  1. Spawn students + sparring partners
-  2. Simulate for N ticks
-  3. Evaluate fitness, evolve, repeat
-  4. Periodically send snapshots back to the main process for rendering
+Each player has one training zone (full screen width strip). The zone trains
+one robot design at a time — the player selects which of their 3 designs to
+train and can hot-swap at any time. Populations are preserved per design.
 
-The main process holds lightweight proxy objects that duck-type match
-the TrainingArena interface so the renderer works unchanged.
+Each zone runs in its own subprocess via multiprocessing. The main process
+holds a lightweight proxy + UI state for input handling and rendering.
 """
 
 from __future__ import annotations
@@ -123,113 +120,251 @@ def _simple_bullet_collisions(bullets: list[Bullet], robots: list[Robot]):
     return hits
 
 
-# Fitness weight presets
-DEFAULT_FITNESS_WEIGHTS = {
-    'hit_enemy': 50.0,
-    'hit_friend': -30.0,
-    'survival': 0.1,
-    'damage_taken': -5.0,
-}
+# --- Fitness parameter definitions ------------------------------------------
+
+FITNESS_PARAMS = [
+    # (key, label, default, min_val, max_val, step)
+    ('hit_enemy',     'Hit enemy',    50.0,    0.0, 200.0, 10.0),
+    ('hit_friend',    'Hit friend',  -30.0, -200.0,   0.0, 10.0),
+    ('survival',      'Survival',      0.1,   -1.0,   2.0,  0.1),
+    ('damage_taken',  'Damage taken', -5.0,  -50.0,   0.0,  5.0),
+    ('dist_to_enemy', 'Dist to enemy', 0.0,    0.0,  10.0,  1.0),
+    ('collect',       'Collect res',   0.0,    0.0, 100.0, 10.0),
+]
+
+DEFAULT_FITNESS_WEIGHTS = {p[0]: p[2] for p in FITNESS_PARAMS}
+
+
+# --- Training zone config ---------------------------------------------------
+
+@dataclass
+class TrainingZoneConfig:
+    """Configuration for a training zone — sent to the worker process."""
+    active_slot: int = 0
+    enemy_slot: int = 0       # which of player's 3 designs for enemy sparring
+    enemy_count: int = 3
+    friend_slot: int = -1     # -1 = none, 0-2 = design index
+    friend_count: int = 0
+    resource_count: int = 0   # scattered resource drops in the arena for gatherer training
+    fitness_weights: dict = field(default_factory=lambda: dict(DEFAULT_FITNESS_WEIGHTS))
+
+    def to_dict(self) -> dict:
+        return {
+            'active_slot': self.active_slot,
+            'enemy_slot': self.enemy_slot,
+            'enemy_count': self.enemy_count,
+            'friend_slot': self.friend_slot,
+            'friend_count': self.friend_count,
+            'resource_count': self.resource_count,
+            'fitness_weights': dict(self.fitness_weights),
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> TrainingZoneConfig:
+        return TrainingZoneConfig(
+            active_slot=d['active_slot'],
+            enemy_slot=d['enemy_slot'],
+            enemy_count=d['enemy_count'],
+            friend_slot=d['friend_slot'],
+            friend_count=d['friend_count'],
+            resource_count=d.get('resource_count', 0),
+            fitness_weights=dict(d['fitness_weights']),
+        )
 
 
 # ---------------------------------------------------------------------------
 # TrainingArena — the actual simulation (runs inside worker processes)
 # ---------------------------------------------------------------------------
 
+@dataclass
+class _ResourceDrop:
+    """A collectible resource drop in the training arena."""
+    pos: np.ndarray
+    alive: bool = True
+
+
+def _simple_gather_resources(robots: list[Robot], resources: list[_ResourceDrop]):
+    """Magnetic gathering: resources fly toward nearby gatherer blocks, collected on contact."""
+    for res in resources:
+        if not res.alive:
+            continue
+        best_pull_robot = None
+        best_pull_dist = float('inf')
+        for robot in robots:
+            if not robot.alive:
+                continue
+            gatherer_blocks = [b for b in robot.blocks if b.block_type == BlockType.GATHERER and b.alive]
+            if not gatherer_blocks:
+                continue
+            dx = robot.pos[0] - res.pos[0]
+            dy = robot.pos[1] - res.pos[1]
+            dist = math.sqrt(dx * dx + dy * dy)
+            # Collect on contact
+            if dist < robot.radius + settings.RESOURCE_RADIUS:
+                robot.resources_collected += 1
+                res.alive = False
+                break
+            # Pull toward nearest gatherer-equipped robot within range
+            if dist < settings.GATHERER_RANGE * len(gatherer_blocks) and dist < best_pull_dist:
+                best_pull_dist = dist
+                best_pull_robot = robot
+        else:
+            # No contact collection happened — apply magnetic pull
+            if best_pull_robot is not None and res.alive:
+                dx = best_pull_robot.pos[0] - res.pos[0]
+                dy = best_pull_robot.pos[1] - res.pos[1]
+                dist = best_pull_dist
+                pull = settings.GATHERER_PULL_SPEED / max(dist, 1.0)
+                res.pos[0] += dx * pull
+                res.pos[1] += dy * pull
+
+
 class TrainingArena:
-    """An isolated arena where one robot design evolves."""
+    """Single training zone — trains one design at a time, holds populations for all 3."""
 
-    def __init__(self, player_id: int, slot_index: int, blueprint: RobotBlueprint):
+    def __init__(self, player_id: int, blueprints: list[RobotBlueprint],
+                 config: TrainingZoneConfig):
         self.player_id = player_id
-        self.slot_index = slot_index
-        self.blueprint = blueprint
-        self.width = settings.TRAINING_ARENA_WIDTH
-        self.height = settings.TRAINING_ARENA_HEIGHT
+        self.blueprints = blueprints
+        self.config = config
+        self.width = settings.TRAINING_ZONE_SIM_WIDTH
+        self.height = settings.TRAINING_ZONE_SIM_HEIGHT
 
-        # Evolution
-        self.population = Population(
-            size=settings.POPULATION_SIZE,
-            input_size=blueprint.brain_input_size,
-            hidden_size=blueprint.hidden_size,
-            output_size=blueprint.brain_output_size,
-            elite_count=settings.ELITE_COUNT,
-            mutation_rate=settings.MUTATION_RATE,
-            mutation_decay=settings.MUTATION_DECAY,
-        )
+        # Per-slot state
+        self.populations: dict[int, Population] = {}
+        self.best_brains: dict[int, Brain | None] = {}
+        self.last_best_fitness: dict[int, float] = {}
+        self.last_avg_fitness: dict[int, float] = {}
+
+        # Initialize all valid slots
+        for slot in range(3):
+            if blueprints[slot].blocks:
+                self._init_slot(slot)
 
         # Simulation state
         self.students: list[Robot] = []
         self.sparring: list[Robot] = []
         self.bullets: list[Bullet] = []
+        self.resources: list[_ResourceDrop] = []
         self.gen_tick = 0
-        self.paused = False
+        self.paused = True  # starts paused (15s setup)
 
-        # Fitness config
-        self.fitness_weights = dict(DEFAULT_FITNESS_WEIGHTS)
+        if self.active_slot in self.populations:
+            self._start_generation()
 
-        # Sparring config: how many copies of self to spar against
-        self.sparring_count = 3
+    @property
+    def active_slot(self) -> int:
+        return self.config.active_slot
 
-        # Best brain from latest generation (used for spawning on battlefield)
-        self.best_brain: Brain | None = None
-        # Stats from last completed generation (evolve() resets the population stats)
-        self.last_best_fitness: float = 0.0
-        self.last_avg_fitness: float = 0.0
+    @property
+    def blueprint(self) -> RobotBlueprint:
+        return self.blueprints[self.active_slot]
 
-        self._start_generation()
+    @property
+    def population(self) -> Population:
+        return self.populations[self.active_slot]
 
     @property
     def generation(self) -> int:
-        return self.population.generation
+        if self.active_slot in self.populations:
+            return self.population.generation
+        return 0
 
     @property
     def all_robots(self) -> list[Robot]:
-        """All alive robots in the arena (for simulation and rendering)."""
         return [r for r in self.students + self.sparring if r.alive]
 
+    def _init_slot(self, slot: int):
+        if slot in self.populations:
+            return
+        bp = self.blueprints[slot]
+        self.populations[slot] = Population(
+            size=settings.POPULATION_SIZE,
+            input_size=bp.brain_input_size,
+            hidden_size=bp.hidden_size,
+            output_size=bp.brain_output_size,
+            elite_count=settings.ELITE_COUNT,
+            mutation_rate=settings.MUTATION_RATE,
+            mutation_decay=settings.MUTATION_DECAY,
+        )
+        self.best_brains[slot] = None
+        self.last_best_fitness[slot] = 0.0
+        self.last_avg_fitness[slot] = 0.0
+
+    def apply_config(self, new_config: TrainingZoneConfig):
+        """Apply new config. If active slot changed, restart generation."""
+        old_slot = self.config.active_slot
+        self.config = new_config
+        if new_config.active_slot != old_slot and new_config.active_slot in self.populations:
+            self._start_generation()
+
     def _start_generation(self):
-        """Spawn students and sparring partners for a new generation."""
         self.gen_tick = 0
         self.bullets = []
         self.students = []
         self.sparring = []
 
-        n_students = min(settings.TRAINING_STUDENT_COUNT, self.population.size)
+        slot = self.active_slot
+        if slot not in self.populations:
+            return
 
-        # Spawn students — each gets a brain from the population
+        bp = self.blueprint
+        pop = self.population
+        n_students = min(settings.TRAINING_STUDENT_COUNT, pop.size)
+
+        # Spawn students
         for i in range(n_students):
             pos = self._random_spawn_pos(team=0)
             robot = Robot(
-                pos=pos,
-                angle=0.0,
-                team=0,  # students are team 0 in the arena
-                blueprint=self.blueprint,
-                brain=self.population.brains[i].copy(),
+                pos=pos, angle=0.0, team=0,
+                blueprint=bp,
+                brain=pop.brains[i].copy(),
             )
             self.students.append(robot)
 
-        # Spawn sparring partners (copies of the same design with best brain or random)
-        for i in range(self.sparring_count):
-            pos = self._random_spawn_pos(team=1)
-            if self.best_brain is not None:
-                brain = self.best_brain.copy()
-            else:
-                brain = Brain(
-                    self.blueprint.brain_input_size,
-                    self.blueprint.hidden_size,
-                    self.blueprint.brain_output_size,
+        # Spawn enemy sparring partners
+        enemy_slot = self.config.enemy_slot
+        if 0 <= enemy_slot < 3 and self.blueprints[enemy_slot].blocks:
+            enemy_bp = self.blueprints[enemy_slot]
+            for _ in range(self.config.enemy_count):
+                pos = self._random_spawn_pos(team=1)
+                brain = self._get_sparring_brain(enemy_slot, enemy_bp)
+                robot = Robot(
+                    pos=pos, angle=math.pi, team=1,
+                    blueprint=enemy_bp, brain=brain,
                 )
-            robot = Robot(
-                pos=pos,
-                angle=math.pi,
-                team=1,  # sparring partners are team 1
-                blueprint=self.blueprint,
-                brain=brain,
-            )
-            self.sparring.append(robot)
+                self.sparring.append(robot)
+
+        # Spawn friend sparring partners
+        friend_slot = self.config.friend_slot
+        if 0 <= friend_slot < 3 and self.blueprints[friend_slot].blocks:
+            friend_bp = self.blueprints[friend_slot]
+            for _ in range(self.config.friend_count):
+                pos = self._random_spawn_pos(team=0)
+                brain = self._get_sparring_brain(friend_slot, friend_bp)
+                robot = Robot(
+                    pos=pos, angle=0.0, team=0,
+                    blueprint=friend_bp, brain=brain,
+                )
+                self.sparring.append(robot)
+
+        # Spawn resource drops (scattered randomly for gatherer training)
+        self.resources = []
+        margin = 40.0
+        for _ in range(self.config.resource_count):
+            pos = np.array([
+                np.random.uniform(margin, self.width - margin),
+                np.random.uniform(margin, self.height - margin),
+            ], dtype=np.float32)
+            self.resources.append(_ResourceDrop(pos=pos))
+
+    def _get_sparring_brain(self, slot: int, bp: RobotBlueprint) -> Brain:
+        best = self.best_brains.get(slot)
+        if best is not None:
+            return best.copy()
+        return Brain(bp.brain_input_size, bp.hidden_size, bp.brain_output_size)
 
     def _random_spawn_pos(self, team: int) -> np.ndarray:
-        """Random position in the arena, biased to left (team 0) or right (team 1)."""
         margin = 30.0
         if team == 0:
             x = np.random.uniform(margin, self.width * 0.4)
@@ -239,13 +374,13 @@ class TrainingArena:
         return np.array([x, y], dtype=np.float32)
 
     def tick(self):
-        """Run one simulation tick in this arena."""
         if self.paused:
+            return
+        if self.active_slot not in self.populations:
             return
 
         self.gen_tick += 1
 
-        # Build combined alive list
         alive_all = [r for r in self.students if r.alive] + \
                     [r for r in self.sparring if r.alive]
 
@@ -253,28 +388,23 @@ class TrainingArena:
             self._end_generation()
             return
 
-        # Lightweight sensors (pure Python, no NumPy overhead)
         sensor_results = _simple_sensor_readings(alive_all)
         for i, robot in enumerate(alive_all):
             if sensor_results[i] is not None:
                 robot.think(sensor_results[i])
 
-        # Shooting
         new_bullets = []
         for robot in alive_all:
             new_bullets.extend(robot.try_shoot())
         self.bullets.extend(new_bullets)
 
-        # Movement
         w, h = self.width, self.height
         for robot in alive_all:
             robot.update()
             clamp_to_arena(robot.pos, robot.radius, w, h)
 
-        # Lightweight collisions
         _simple_robot_collisions(alive_all)
 
-        # Lightweight bullet-robot collisions
         hits = _simple_bullet_collisions(self.bullets, alive_all)
         for bi, target, bpos in hits:
             shooter_team = self.bullets[bi].team
@@ -287,10 +417,13 @@ class TrainingArena:
 
             self.bullets[bi].alive = False
 
-        # Cleanup dead bullets (keep dead robots for fitness tracking)
         self.bullets = [b for b in self.bullets if b.alive]
 
-        # End generation?
+        # Gatherer resource collection
+        if self.resources:
+            _simple_gather_resources(alive_all, self.resources)
+            self.resources = [r for r in self.resources if r.alive]
+
         all_students_dead = not any(s.alive for s in self.students)
         time_up = self.gen_tick >= settings.TRAINING_TICKS_PER_GENERATION
 
@@ -298,7 +431,6 @@ class TrainingArena:
             self._end_generation()
 
     def _credit_hit(self, bullet_pos: np.ndarray, hit_type: str):
-        """Credit the nearest alive student for a hit."""
         best_student = None
         best_dist = float('inf')
         for s in self.students:
@@ -312,61 +444,70 @@ class TrainingArena:
             if hit_type == 'hit_enemy':
                 best_student.hits_dealt += 1
             elif hit_type == 'hit_friend':
-                best_student.hits_dealt -= 1  # negative to penalize
+                best_student.hits_dealt -= 1
 
     def _end_generation(self):
-        """Evaluate fitness, evolve, start next generation."""
-        w = self.fitness_weights
+        w = self.config.fitness_weights
+        slot = self.active_slot
 
         for i, robot in enumerate(self.students):
             fitness = (
-                robot.hits_dealt * w['hit_enemy']
-                + robot.ticks_alive * w['survival']
-                + robot.hits_taken * w['damage_taken']
+                robot.hits_dealt * w.get('hit_enemy', 0)
+                + robot.ticks_alive * w.get('survival', 0)
+                + robot.hits_taken * w.get('damage_taken', 0)
+                + robot.resources_collected * w.get('collect', 0)
             )
             self.population.set_fitness(i, fitness)
 
-        # Save stats before evolving (evolve resets fitness array)
-        self.last_best_fitness = float(np.max(self.population.fitness))
-        self.last_avg_fitness = float(np.mean(self.population.fitness))
-        self.best_brain = self.population.get_best()
+        self.last_best_fitness[slot] = float(np.max(self.population.fitness))
+        self.last_avg_fitness[slot] = float(np.mean(self.population.fitness))
+        self.best_brains[slot] = self.population.get_best()
 
-        # Evolve
         self.population.evolve()
-
-        # Start next generation
         self._start_generation()
 
-    def get_best_brain(self) -> Brain:
-        """Get the best brain for spawning on the battlefield."""
-        if self.best_brain is not None:
-            return self.best_brain.copy()
-        return self.population.get_best()
+    def get_best_brain(self, slot: int | None = None) -> Brain:
+        if slot is None:
+            slot = self.active_slot
+        best = self.best_brains.get(slot)
+        if best is not None:
+            return best.copy()
+        bp = self.blueprints[slot]
+        return Brain(bp.brain_input_size, bp.hidden_size, bp.brain_output_size)
 
     def get_stats(self) -> dict:
-        """Get training stats for UI display."""
-        return {
+        slot = self.active_slot
+        base = {
+            'active_slot': slot,
+            'slot_generations': {s: p.generation for s, p in self.populations.items()},
+        }
+        if slot not in self.populations:
+            base.update({
+                'generation': 0, 'best_fitness': 0.0, 'avg_fitness': 0.0,
+                'gen_tick': 0, 'alive_students': 0, 'total_students': 0,
+                'alive_sparring': 0,
+            })
+            return base
+        base.update({
             'generation': self.population.generation,
-            'best_fitness': self.last_best_fitness,
-            'avg_fitness': self.last_avg_fitness,
+            'best_fitness': self.last_best_fitness.get(slot, 0.0),
+            'avg_fitness': self.last_avg_fitness.get(slot, 0.0),
             'gen_tick': self.gen_tick,
             'alive_students': sum(1 for s in self.students if s.alive),
             'total_students': len(self.students),
             'alive_sparring': sum(1 for s in self.sparring if s.alive),
-        }
+        })
+        return base
 
 
 # ---------------------------------------------------------------------------
 # Multiprocessing: worker function + snapshot packing
 # ---------------------------------------------------------------------------
 
-# Minimum interval between render snapshots sent to main process (seconds).
-# Generation-end snapshots (with best brain) are always sent immediately.
 _SNAPSHOT_MIN_INTERVAL = 0.03  # ~30fps worth of render data
 
 
 def _pack_robots(arena: TrainingArena) -> list[tuple]:
-    """Pack robot state into picklable tuples."""
     result = []
     for r in arena.students + arena.sparring:
         blocks = [(b.grid_x, b.grid_y, b.block_type.value, b.alive, b.hp, b.max_hp)
@@ -376,25 +517,27 @@ def _pack_robots(arena: TrainingArena) -> list[tuple]:
 
 
 def _pack_bullets(arena: TrainingArena) -> list[tuple]:
-    """Pack bullet state into picklable tuples."""
     return [(b.pos[0], b.pos[1], b.team) for b in arena.bullets if b.alive]
 
 
-def _arena_worker(blueprint_dict: dict, config: dict, conn: mp.connection.Connection):
-    """Training arena worker — runs in a subprocess.
+def _pack_resources(arena: TrainingArena) -> list[tuple]:
+    return [(r.pos[0], r.pos[1]) for r in arena.resources if r.alive]
 
-    Ticks the arena as fast as possible and sends snapshots back to the
-    main process through ``conn`` (a multiprocessing Pipe endpoint).
+
+def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connection.Connection):
+    """Training zone worker — runs in a subprocess.
 
     Commands from main process (received via conn):
-        'stop'   — exit the worker loop
-        'pause'  — pause simulation
-        'resume' — resume simulation
+        'stop'              — exit the worker loop
+        'pause'             — pause simulation
+        'resume'            — resume simulation
+        ('config', dict)    — update training zone config
     """
     import traceback
     try:
-        blueprint = RobotBlueprint.from_dict(blueprint_dict)
-        arena = TrainingArena(config['player_id'], config['slot_index'], blueprint)
+        blueprints = [RobotBlueprint.from_dict(d) for d in blueprint_dicts]
+        config = TrainingZoneConfig.from_dict(config_dict)
+        arena = TrainingArena(config_dict['player_id'], blueprints, config)
 
         last_gen = -1
         last_snapshot_time = 0.0
@@ -410,6 +553,9 @@ def _arena_worker(blueprint_dict: dict, config: dict, conn: mp.connection.Connec
                     arena.paused = True
                 elif cmd == 'resume':
                     arena.paused = False
+                elif isinstance(cmd, tuple) and cmd[0] == 'config':
+                    new_config = TrainingZoneConfig.from_dict(cmd[1])
+                    arena.apply_config(new_config)
 
             # Run one tick
             arena.tick()
@@ -424,20 +570,24 @@ def _arena_worker(blueprint_dict: dict, config: dict, conn: mp.connection.Connec
                     'stats': arena.get_stats(),
                     'robots': _pack_robots(arena),
                     'bullets': _pack_bullets(arena),
+                    'resources': _pack_resources(arena),
                 }
                 if gen_changed:
                     last_gen = arena.generation
-                    if arena.best_brain is not None:
+                    slot = arena.active_slot
+                    best = arena.best_brains.get(slot)
+                    if best is not None:
                         snapshot['best_brain'] = {
-                            'weights': arena.best_brain.get_flat_weights(),
-                            'input_size': arena.best_brain.input_size,
-                            'hidden_size': arena.best_brain.hidden_size,
-                            'output_size': arena.best_brain.output_size,
+                            'slot': slot,
+                            'weights': best.get_flat_weights(),
+                            'input_size': best.input_size,
+                            'hidden_size': best.hidden_size,
+                            'output_size': best.output_size,
                         }
                 try:
                     conn.send(snapshot)
                 except (BrokenPipeError, OSError):
-                    return  # main process closed the connection
+                    return
                 last_snapshot_time = now
     except Exception:
         traceback.print_exc()
@@ -448,12 +598,11 @@ def _arena_worker(blueprint_dict: dict, config: dict, conn: mp.connection.Connec
 
 
 # ---------------------------------------------------------------------------
-# Lightweight render proxy objects (duck-type compatible with Robot/Bullet/Block)
+# Lightweight render proxy objects
 # ---------------------------------------------------------------------------
 
 @dataclass
 class _RenderBlock:
-    """Minimal block for rendering — matches the attrs the renderer reads."""
     grid_x: int
     grid_y: int
     block_type: BlockType
@@ -464,7 +613,6 @@ class _RenderBlock:
 
 @dataclass
 class _RenderRobot:
-    """Minimal robot for rendering — matches the attrs the renderer reads."""
     pos: np.ndarray
     angle: float
     team: int
@@ -474,38 +622,36 @@ class _RenderRobot:
 
 @dataclass
 class _RenderBullet:
-    """Minimal bullet for rendering — matches the attrs the renderer reads."""
     pos: np.ndarray
     team: int
     alive: bool = True
 
 
 # ---------------------------------------------------------------------------
-# TrainingArenaProxy — main-process stand-in for a worker arena
+# TrainingZoneProxy — main-process stand-in for a worker zone
 # ---------------------------------------------------------------------------
 
-class TrainingArenaProxy:
-    """Receives snapshots from a worker process and exposes the same interface
-    as TrainingArena so the renderer works unchanged."""
+class TrainingZoneProxy:
+    """Receives snapshots from a worker process and exposes rendering data."""
 
-    def __init__(self, player_id: int, slot_index: int,
-                 blueprint: RobotBlueprint, conn: mp.connection.Connection):
+    def __init__(self, player_id: int, blueprints: list[RobotBlueprint],
+                 conn: mp.connection.Connection):
         self.player_id = player_id
-        self.slot_index = slot_index
-        self.blueprint = blueprint
-        self.width = settings.TRAINING_ARENA_WIDTH
-        self.height = settings.TRAINING_ARENA_HEIGHT
+        self.blueprints = blueprints
+        self.width = settings.TRAINING_ZONE_SIM_WIDTH
+        self.height = settings.TRAINING_ZONE_SIM_HEIGHT
         self._conn = conn
 
         # Cached render state
         self._robots: list[_RenderRobot] = []
         self._bullets: list[_RenderBullet] = []
+        self._resources: list[np.ndarray] = []  # list of [x, y] positions
         self._stats: dict = {
             'generation': 0, 'best_fitness': 0.0, 'avg_fitness': 0.0,
             'gen_tick': 0, 'alive_students': 0, 'total_students': 0,
-            'alive_sparring': 0,
+            'alive_sparring': 0, 'active_slot': 0, 'slot_generations': {},
         }
-        self._best_brain_data: dict | None = None
+        self._best_brains: dict[int, dict] = {}  # slot -> brain data
 
     @property
     def generation(self) -> int:
@@ -519,25 +665,37 @@ class TrainingArenaProxy:
     def bullets(self) -> list[_RenderBullet]:
         return self._bullets
 
+    @property
+    def resources(self) -> list[np.ndarray]:
+        return self._resources
+
     def get_stats(self) -> dict:
         return self._stats
 
-    def get_best_brain(self) -> Brain:
-        """Reconstruct the best brain from cached worker data."""
-        if self._best_brain_data is not None:
-            d = self._best_brain_data
+    def get_best_brain(self, slot: int | None = None) -> Brain:
+        if slot is None:
+            slot = self._stats.get('active_slot', 0)
+        if slot in self._best_brains:
+            d = self._best_brains[slot]
             brain = Brain(d['input_size'], d['hidden_size'], d['output_size'])
             brain.set_flat_weights(d['weights'].copy())
             return brain
-        # Fallback: return a random brain matching the blueprint
-        return Brain(
-            self.blueprint.brain_input_size,
-            self.blueprint.hidden_size,
-            self.blueprint.brain_output_size,
-        )
+        bp = self.blueprints[slot]
+        return Brain(bp.brain_input_size, bp.hidden_size, bp.brain_output_size)
+
+    def send_config(self, config: TrainingZoneConfig):
+        try:
+            self._conn.send(('config', config.to_dict()))
+        except (BrokenPipeError, OSError):
+            pass
+
+    def send_command(self, cmd):
+        try:
+            self._conn.send(cmd)
+        except (BrokenPipeError, OSError):
+            pass
 
     def poll_updates(self):
-        """Drain all pending snapshots from the worker, keep the latest."""
         latest = None
         try:
             while self._conn.poll():
@@ -551,9 +709,9 @@ class TrainingArenaProxy:
         self._stats = snapshot['stats']
 
         if 'best_brain' in snapshot:
-            self._best_brain_data = snapshot['best_brain']
+            bd = snapshot['best_brain']
+            self._best_brains[bd['slot']] = bd
 
-        # Rebuild render robots
         self._robots = []
         for (x, y, angle, team, alive, blocks_data) in snapshot['robots']:
             blocks = [
@@ -572,8 +730,11 @@ class TrainingArenaProxy:
                 team=team,
             ))
 
+        self._resources = []
+        for (x, y) in snapshot.get('resources', []):
+            self._resources.append(np.array([x, y], dtype=np.float32))
+
     def stop(self):
-        """Tell the worker to exit."""
         try:
             self._conn.send('stop')
         except (BrokenPipeError, OSError):
@@ -581,64 +742,237 @@ class TrainingArenaProxy:
 
 
 # ---------------------------------------------------------------------------
-# TrainingManager — spawns and manages worker processes
+# TrainingZoneUI — per-player input handling for training zone config
+# ---------------------------------------------------------------------------
+
+class TrainingZoneUI:
+    """Handles player input for training zone configuration during match."""
+
+    ROW_DESIGN = 0
+    ROW_ENEMY_TYPE = 1
+    ROW_ENEMY_COUNT = 2
+    ROW_FRIEND_TYPE = 3
+    ROW_FRIEND_COUNT = 4
+    ROW_RESOURCES = 5
+    ROW_FITNESS_START = 6
+    NUM_ROWS = ROW_FITNESS_START + len(FITNESS_PARAMS)
+
+    # Labels for rendering
+    ROW_LABELS = [
+        'Design',
+        'Enemy type',
+        'Enemy count',
+        'Friend type',
+        'Friend count',
+        'Resources',
+    ] + [p[1] for p in FITNESS_PARAMS]
+
+    def __init__(self, player_id: int, blueprints: list[RobotBlueprint]):
+        self.player_id = player_id
+        self.blueprints = blueprints
+        self.cursor_row = 0
+        self.config = TrainingZoneConfig()
+        self._config_dirty = True
+
+        # Find first valid slot
+        for i in range(3):
+            if blueprints[i].blocks:
+                self.config.active_slot = i
+                self.config.enemy_slot = i
+                break
+
+        # Key repeat state
+        self._held: dict[int, int] = {}
+        self._repeat_delay = 18  # frames before repeat starts
+        self._repeat_interval = 5  # frames between repeats
+
+    def handle_input(self, keys_pressed) -> bool:
+        """Process player input. Returns True if config changed."""
+        pk = settings.PLAYER_KEYS[self.player_id]
+        changed = False
+
+        if self._key_event(keys_pressed, pk['up']):
+            self.cursor_row = max(0, self.cursor_row - 1)
+        if self._key_event(keys_pressed, pk['down']):
+            self.cursor_row = min(self.NUM_ROWS - 1, self.cursor_row + 1)
+
+        if self._key_event(keys_pressed, pk['primary']):
+            changed = self._adjust(+1)
+        if self._key_event(keys_pressed, pk['secondary']):
+            changed = self._adjust(-1)
+
+        if changed:
+            self._config_dirty = True
+        return changed
+
+    def _key_event(self, keys_pressed, key: int) -> bool:
+        if keys_pressed[key]:
+            if key not in self._held:
+                self._held[key] = 0
+                return True
+            self._held[key] += 1
+            held = self._held[key]
+            if held >= self._repeat_delay and (held - self._repeat_delay) % self._repeat_interval == 0:
+                return True
+            return False
+        else:
+            self._held.pop(key, None)
+            return False
+
+    def _adjust(self, direction: int) -> bool:
+        row = self.cursor_row
+        cfg = self.config
+
+        if row == self.ROW_DESIGN:
+            return self._cycle_slot('active_slot', direction)
+
+        elif row == self.ROW_ENEMY_TYPE:
+            return self._cycle_slot('enemy_slot', direction)
+
+        elif row == self.ROW_ENEMY_COUNT:
+            new = max(0, min(8, cfg.enemy_count + direction))
+            if new != cfg.enemy_count:
+                cfg.enemy_count = new
+                return True
+
+        elif row == self.ROW_FRIEND_TYPE:
+            # Cycles through -1 (none), then valid slots
+            options = [-1] + [i for i in range(3) if self.blueprints[i].blocks]
+            cur_idx = options.index(cfg.friend_slot) if cfg.friend_slot in options else 0
+            new_idx = (cur_idx + direction) % len(options)
+            new_slot = options[new_idx]
+            if new_slot != cfg.friend_slot:
+                cfg.friend_slot = new_slot
+                return True
+
+        elif row == self.ROW_FRIEND_COUNT:
+            new = max(0, min(8, cfg.friend_count + direction))
+            if new != cfg.friend_count:
+                cfg.friend_count = new
+                return True
+
+        elif row == self.ROW_RESOURCES:
+            new = max(0, min(20, cfg.resource_count + direction))
+            if new != cfg.resource_count:
+                cfg.resource_count = new
+                return True
+
+        elif row >= self.ROW_FITNESS_START:
+            fi = row - self.ROW_FITNESS_START
+            if fi < len(FITNESS_PARAMS):
+                key, _label, default, lo, hi, step = FITNESS_PARAMS[fi]
+                old_val = cfg.fitness_weights.get(key, default)
+                new_val = max(lo, min(hi, old_val + direction * step))
+                if abs(new_val - old_val) > 1e-9:
+                    cfg.fitness_weights[key] = round(new_val, 2)
+                    return True
+
+        return False
+
+    def _cycle_slot(self, attr: str, direction: int) -> bool:
+        cur = getattr(self.config, attr)
+        new_slot = (cur + direction) % 3
+        for _ in range(3):
+            if self.blueprints[new_slot].blocks:
+                break
+            new_slot = (new_slot + direction) % 3
+        if new_slot != cur:
+            setattr(self.config, attr, new_slot)
+            return True
+        return False
+
+    def get_value_str(self, row: int) -> str:
+        """Get display string for the value at a given row."""
+        cfg = self.config
+        if row == self.ROW_DESIGN:
+            return f"Bot {cfg.active_slot + 1}"
+        elif row == self.ROW_ENEMY_TYPE:
+            return f"Bot {cfg.enemy_slot + 1}"
+        elif row == self.ROW_ENEMY_COUNT:
+            return str(cfg.enemy_count)
+        elif row == self.ROW_FRIEND_TYPE:
+            return "None" if cfg.friend_slot < 0 else f"Bot {cfg.friend_slot + 1}"
+        elif row == self.ROW_FRIEND_COUNT:
+            return str(cfg.friend_count)
+        elif row == self.ROW_RESOURCES:
+            return str(cfg.resource_count)
+        elif row >= self.ROW_FITNESS_START:
+            fi = row - self.ROW_FITNESS_START
+            if fi < len(FITNESS_PARAMS):
+                key = FITNESS_PARAMS[fi][0]
+                val = cfg.fitness_weights.get(key, FITNESS_PARAMS[fi][2])
+                if abs(val) < 1.0 and val != 0:
+                    return f"{val:+.1f}"
+                return f"{val:+.0f}"
+        return ""
+
+    def is_dirty(self) -> bool:
+        dirty = self._config_dirty
+        self._config_dirty = False
+        return dirty
+
+
+# ---------------------------------------------------------------------------
+# TrainingManager — spawns and manages worker processes (1 per player)
 # ---------------------------------------------------------------------------
 
 class TrainingManager:
-    """Manages training arenas across worker processes for both players."""
+    """Manages one training zone worker per player."""
 
     def __init__(self, player_blueprints: list[list[RobotBlueprint]]):
-        self.arenas: list[list[TrainingArenaProxy | None]] = []
+        self.zones: list[TrainingZoneProxy] = []
+        self.uis: list[TrainingZoneUI] = []
         self._workers: list[mp.Process] = []
 
-        # Use 'spawn' context to avoid forking pygame/SDL state into workers,
-        # which causes silent segfaults on Linux.
         ctx = mp.get_context('spawn')
 
         for player_id in range(2):
-            player_arenas: list[TrainingArenaProxy | None] = []
-            for slot in range(3):
-                bp = player_blueprints[player_id][slot]
-                if bp.blocks:
-                    main_conn, worker_conn = ctx.Pipe()
-                    config = {'player_id': player_id, 'slot_index': slot}
-                    p = ctx.Process(
-                        target=_arena_worker,
-                        args=(bp.to_dict(), config, worker_conn),
-                        daemon=True,
-                    )
-                    p.start()
-                    # Main process doesn't use the worker's pipe end
-                    worker_conn.close()
+            bps = player_blueprints[player_id]
+            ui = TrainingZoneUI(player_id, bps)
+            self.uis.append(ui)
 
-                    proxy = TrainingArenaProxy(player_id, slot, bp, main_conn)
-                    player_arenas.append(proxy)
-                    self._workers.append(p)
-                else:
-                    player_arenas.append(None)
-            self.arenas.append(player_arenas)
+            main_conn, worker_conn = ctx.Pipe()
+            config_dict = ui.config.to_dict()
+            config_dict['player_id'] = player_id
 
-    def tick(self, ticks_per_frame: int = None):
-        """Poll all workers for snapshot updates.
+            p = ctx.Process(
+                target=_zone_worker,
+                args=([bp.to_dict() for bp in bps], config_dict, worker_conn),
+                daemon=True,
+            )
+            p.start()
+            worker_conn.close()
 
-        Workers run independently at full speed — this just collects their
-        latest state for rendering and game logic.  The ``ticks_per_frame``
-        argument is accepted for API compatibility but ignored.
-        """
-        for player_arenas in self.arenas:
-            for arena in player_arenas:
-                if arena is not None:
-                    arena.poll_updates()
+            proxy = TrainingZoneProxy(player_id, bps, main_conn)
+            self.zones.append(proxy)
+            self._workers.append(p)
 
-    def get_arena(self, player_id: int, slot: int) -> TrainingArenaProxy | None:
-        return self.arenas[player_id][slot]
+    def tick(self):
+        """Poll all workers for snapshot updates."""
+        for zone in self.zones:
+            zone.poll_updates()
+
+    def handle_input(self, keys_pressed):
+        """Process both players' training zone input."""
+        for i, ui in enumerate(self.uis):
+            ui.handle_input(keys_pressed)
+            if ui.is_dirty():
+                self.zones[i].send_config(ui.config)
+
+    def resume_training(self):
+        """Resume training on all zones (called after setup period)."""
+        for zone in self.zones:
+            zone.send_command('resume')
+
+    def get_zone(self, player_id: int) -> TrainingZoneProxy:
+        return self.zones[player_id]
+
+    def get_ui(self, player_id: int) -> TrainingZoneUI:
+        return self.uis[player_id]
 
     def stop(self):
-        """Shut down all worker processes."""
-        for player_arenas in self.arenas:
-            for arena in player_arenas:
-                if arena is not None:
-                    arena.stop()
+        for zone in self.zones:
+            zone.stop()
         for p in self._workers:
             p.join(timeout=2)
             if p.is_alive():

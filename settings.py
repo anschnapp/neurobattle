@@ -83,11 +83,19 @@ MUTATION_DECAY = 0.995  # rate decreases slightly each generation
 
 # --- Training ---
 TRAINING_TICKS_PER_GENERATION = 300  # how many sim ticks per generation eval
-TRAINING_ARENA_WIDTH = 350
-TRAINING_ARENA_HEIGHT = 250
+TRAINING_ZONE_SIM_WIDTH = 800   # sim coords for single training zone
+TRAINING_ZONE_SIM_HEIGHT = 400
 TRAINING_STUDENT_COUNT = 10
 TRAINING_TICKS_PER_FRAME = 3  # training runs faster than real-time
 TRAINING_RENDER_INTERVAL = 3  # only redraw training strips every N frames
+TRAINING_SETUP_TICKS = 15 * FPS  # 15 seconds setup before training starts
+TRAINING_CONFIG_PANEL_WIDTH = 350  # pixels for the config panel in the strip
+
+# --- Gatherer / Resources ---
+GATHERER_RANGE = 80.0       # magnetic pull radius per gatherer block
+GATHERER_PULL_SPEED = 2.0   # how fast resources fly toward gatherer
+RESOURCE_RADIUS = 4
+RESOURCE_VALUE = 1           # fitness credit per pickup
 
 # --- Auto-fork ---
 AUTO_FORK_COOLDOWN = 300  # ticks between auto-forks
