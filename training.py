@@ -130,6 +130,7 @@ FITNESS_PARAMS = [
     ('damage_taken',  'Damage taken', -5.0,  -50.0,  50.0,  5.0),
     ('dist_to_enemy', 'Dist to enemy', 0.0,  -10.0,  10.0,  1.0),
     ('collect',       'Collect res',   0.0, -100.0, 100.0, 10.0),
+    ('scan_enemy',    'Scan enemy',    0.0, -200.0, 200.0, 10.0),
 ]
 
 DEFAULT_FITNESS_WEIGHTS = {p[0]: p[2] for p in FITNESS_PARAMS}
@@ -217,6 +218,46 @@ def _simple_gather_resources(robots: list[Robot], resources: list[_ResourceDrop]
                 pull = settings.GATHERER_PULL_SPEED / max(dist, 1.0)
                 res.pos[0] += dx * pull
                 res.pos[1] += dy * pull
+
+
+def _simple_scan_enemies(robots: list[Robot]):
+    """Check scanner blocks on each robot for enemy-team robots in range/cone.
+
+    Only counts scans against enemies (different team).  Each scanner block
+    can fire once per its scan_rate cooldown.  A successful scan increments
+    the scanning robot's ``scans_enemy`` counter.
+    """
+    for robot in robots:
+        if not robot.alive:
+            continue
+        scanner_blocks = [b for b in robot.blocks
+                          if b.block_type == BlockType.SCANNER and b.alive
+                          and b.scan_cooldown <= 0]
+        if not scanner_blocks:
+            continue
+        for scanner in scanner_blocks:
+            s_pos = robot.get_block_world_pos(scanner)
+            s_angle = robot.get_block_world_angle(scanner)
+            cos_fov = math.cos(scanner.sensor_fov / 2)
+            s_dx = math.cos(s_angle)
+            s_dy = math.sin(s_angle)
+            s_range = scanner.scan_range
+
+            for other in robots:
+                if not other.alive or other.team == robot.team:
+                    continue
+                dx = other.pos[0] - s_pos[0]
+                dy = other.pos[1] - s_pos[1]
+                d = math.sqrt(dx * dx + dy * dy)
+                if d >= s_range or d < 0.001:
+                    continue
+                dot = (dx * s_dx + dy * s_dy) / d
+                if dot < cos_fov:
+                    continue
+                # Successful scan
+                robot.scans_enemy += 1
+                scanner.scan_cooldown = scanner.scan_rate
+                break  # one scan per scanner per cooldown
 
 
 class TrainingArena:
@@ -419,6 +460,9 @@ class TrainingArena:
 
         self.bullets = [b for b in self.bullets if b.alive]
 
+        # Scanner enemy detection
+        _simple_scan_enemies(alive_all)
+
         # Gatherer resource collection
         if self.resources:
             _simple_gather_resources(alive_all, self.resources)
@@ -460,6 +504,7 @@ class TrainingArena:
                 + robot.hits_taken * w.get('damage_taken', 0)
                 + dist_score * w.get('dist_to_enemy', 0)
                 + robot.resources_collected * w.get('collect', 0)
+                + robot.scans_enemy * w.get('scan_enemy', 0)
             )
             self.population.set_fitness(i, fitness)
 
