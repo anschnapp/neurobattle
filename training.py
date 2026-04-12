@@ -124,12 +124,12 @@ def _simple_bullet_collisions(bullets: list[Bullet], robots: list[Robot]):
 
 FITNESS_PARAMS = [
     # (key, label, default, min_val, max_val, step)
-    ('hit_enemy',     'Hit enemy',    50.0,    0.0, 200.0, 10.0),
-    ('hit_friend',    'Hit friend',  -30.0, -200.0,   0.0, 10.0),
-    ('survival',      'Survival',      0.1,   -1.0,   2.0,  0.1),
-    ('damage_taken',  'Damage taken', -5.0,  -50.0,   0.0,  5.0),
-    ('dist_to_enemy', 'Dist to enemy', 0.0,    0.0,  10.0,  1.0),
-    ('collect',       'Collect res',   0.0,    0.0, 100.0, 10.0),
+    ('hit_enemy',     'Hit enemy',    50.0, -200.0, 200.0, 10.0),
+    ('hit_friend',    'Hit friend',  -30.0, -200.0, 200.0, 10.0),
+    ('survival',      'Survival',      0.1,   -2.0,   2.0,  0.1),
+    ('damage_taken',  'Damage taken', -5.0,  -50.0,  50.0,  5.0),
+    ('dist_to_enemy', 'Dist to enemy', 0.0,  -10.0,  10.0,  1.0),
+    ('collect',       'Collect res',   0.0, -100.0, 100.0, 10.0),
 ]
 
 DEFAULT_FITNESS_WEIGHTS = {p[0]: p[2] for p in FITNESS_PARAMS}
@@ -444,17 +444,21 @@ class TrainingArena:
             if hit_type == 'hit_enemy':
                 best_student.hits_dealt += 1
             elif hit_type == 'hit_friend':
-                best_student.hits_dealt -= 1
+                best_student.hits_friend += 1
 
     def _end_generation(self):
         w = self.config.fitness_weights
         slot = self.active_slot
 
         for i, robot in enumerate(self.students):
+            # Distance toward enemy side (right edge of arena, normalized 0..1)
+            dist_score = robot.pos[0] / self.width if robot.alive else 0.0
             fitness = (
                 robot.hits_dealt * w.get('hit_enemy', 0)
+                + robot.hits_friend * w.get('hit_friend', 0)
                 + robot.ticks_alive * w.get('survival', 0)
                 + robot.hits_taken * w.get('damage_taken', 0)
+                + dist_score * w.get('dist_to_enemy', 0)
                 + robot.resources_collected * w.get('collect', 0)
             )
             self.population.set_fitness(i, fitness)

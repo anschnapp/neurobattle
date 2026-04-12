@@ -121,14 +121,14 @@ Training is free (no resource cost). Each player has a **single training zone** 
 
 ### Fitness Function
 
-The player configures fitness by adjusting weights on predefined components:
+The player configures fitness by adjusting weights on predefined components. Every weight slider goes both positive and negative — the player can reward or punish any metric (e.g., reward taking damage for a blocker bot). Defaults are sensible but nothing is locked:
 
-- Hitting enemies: +N
-- Hitting friends: -N
-- Survival time: +N per tick
-- Distance toward enemy base: +N per unit closer
-- Taking damage: -N
-- **Collecting resources: +N** (for gatherer-type robots)
+- **Hit enemy** (default +50): reward/punish landing hits on enemies
+- **Hit friend** (default -30): reward/punish landing hits on friendlies (tracked separately from enemy hits)
+- **Survival** (default +0.1): reward/punish per tick alive
+- **Damage taken** (default -5): reward/punish per hit received
+- **Dist to enemy** (default 0): reward/punish based on how far toward the enemy side of the arena the robot is (normalized 0..1 across arena width)
+- **Collect resources** (default 0): reward/punish per resource collected
 
 The mix of weights shapes what behavior evolves — aggressive, defensive, evasive, resource-focused, etc.
 

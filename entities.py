@@ -24,6 +24,7 @@ class Robot:
     velocity: np.ndarray = field(default=None)
     # Fitness tracking
     hits_dealt: int = 0
+    hits_friend: int = 0
     hits_taken: int = 0
     ticks_alive: int = 0
     distance_traveled: float = 0.0
