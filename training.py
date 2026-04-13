@@ -158,8 +158,9 @@ def _simple_sensor_readings(robots: list[Robot],
 
 
 def _simple_robot_collisions(robots: list[Robot]):
-    """Simple pairwise push — faster than NumPy for N<30."""
+    """Simple pairwise push with collision damage — faster than NumPy for N<30."""
     n = len(robots)
+    dmg = settings.COLLISION_DAMAGE
     for i in range(n):
         if not robots[i].alive:
             continue
@@ -180,6 +181,9 @@ def _simple_robot_collisions(robots: list[Robot]):
             robots[i].pos[1] += py
             robots[j].pos[0] -= px
             robots[j].pos[1] -= py
+            # Collision damage — both take damage, no hit bonus
+            robots[i].take_damage(dmg)
+            robots[j].take_damage(dmg)
 
 
 def _simple_bullet_collisions(bullets: list[Bullet], robots: list[Robot]):
@@ -567,7 +571,7 @@ class TrainingArena:
 
         _simple_robot_collisions(alive_all)
 
-        # Accumulate distances for fitness
+        # Track distances for delta-based fitness (initial and best/minimum)
         alive_enemies = [r for r in self.sparring if r.alive and r.team != 0]
         alive_friends = [r for r in self.sparring if r.alive and r.team == 0]
         enemy_base_pos = self.enemy_base_pos
@@ -577,14 +581,24 @@ class TrainingArena:
                 continue
             if alive_enemies:
                 enemy_positions = np.array([e.pos for e in alive_enemies])
-                dists = np.linalg.norm(enemy_positions - s.pos, axis=1)
-                s.cum_dist_to_enemy += float(np.min(dists))
+                d = float(np.min(np.linalg.norm(enemy_positions - s.pos, axis=1)))
+                if s.init_dist_to_enemy < 0:
+                    s.init_dist_to_enemy = d
+                s.best_dist_to_enemy = min(s.best_dist_to_enemy, d)
             if alive_friends:
                 friend_positions = np.array([f.pos for f in alive_friends])
-                dists = np.linalg.norm(friend_positions - s.pos, axis=1)
-                s.cum_dist_to_friend += float(np.min(dists))
-            s.cum_dist_to_ebase += float(np.linalg.norm(enemy_base_pos - s.pos))
-            s.cum_dist_to_fbase += float(np.linalg.norm(friend_base_pos - s.pos))
+                d = float(np.min(np.linalg.norm(friend_positions - s.pos, axis=1)))
+                if s.init_dist_to_friend < 0:
+                    s.init_dist_to_friend = d
+                s.best_dist_to_friend = min(s.best_dist_to_friend, d)
+            d_ebase = float(np.linalg.norm(enemy_base_pos - s.pos))
+            d_fbase = float(np.linalg.norm(friend_base_pos - s.pos))
+            if s.init_dist_to_ebase < 0:
+                s.init_dist_to_ebase = d_ebase
+            if s.init_dist_to_fbase < 0:
+                s.init_dist_to_fbase = d_fbase
+            s.best_dist_to_ebase = min(s.best_dist_to_ebase, d_ebase)
+            s.best_dist_to_fbase = min(s.best_dist_to_fbase, d_fbase)
 
         hits = _simple_bullet_collisions(self.bullets, alive_all)
         for bi, target, bpos in hits:
@@ -635,16 +649,19 @@ class TrainingArena:
         slot = self.active_slot
 
         for i, robot in enumerate(self.students):
-            arena_diag = np.sqrt(self.width**2 + self.height**2)
-            if robot.ticks_alive > 0:
-                t = robot.ticks_alive
-                # All inverted: 1.0 = close, 0.0 = far
-                dist_enemy = 1.0 - min(robot.cum_dist_to_enemy / t / arena_diag, 1.0)
-                dist_friend = 1.0 - min(robot.cum_dist_to_friend / t / arena_diag, 1.0)
-                dist_ebase = 1.0 - min(robot.cum_dist_to_ebase / t / arena_diag, 1.0)
-                dist_fbase = 1.0 - min(robot.cum_dist_to_fbase / t / arena_diag, 1.0)
-            else:
-                dist_enemy = dist_friend = dist_ebase = dist_fbase = 0.0
+            # Delta-based distance fitness: reward for getting closer than spawn position
+            # Score = sqrt((init - best) / init) — 0 if never got closer, 1 if reached target
+            # Square root makes getting closer when already close worth more
+            def _delta_score(init_d: float, best_d: float) -> float:
+                if init_d <= 0:
+                    return 0.0
+                approach = max(0.0, init_d - best_d) / init_d  # 0..1
+                return math.sqrt(approach)  # sqrt rewards closing in more
+
+            dist_enemy = _delta_score(robot.init_dist_to_enemy, robot.best_dist_to_enemy)
+            dist_friend = _delta_score(robot.init_dist_to_friend, robot.best_dist_to_friend)
+            dist_ebase = _delta_score(robot.init_dist_to_ebase, robot.best_dist_to_ebase)
+            dist_fbase = _delta_score(robot.init_dist_to_fbase, robot.best_dist_to_fbase)
             fitness = (
                 robot.hits_dealt * w.get('hit_enemy', 0)
                 + robot.hits_friend * w.get('hit_friend', 0)

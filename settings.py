@@ -54,6 +54,9 @@ ROBOT_DEFAULT_HP = 50
 ROBOT_DEFAULT_SPEED = 2.0
 ROBOT_DEFAULT_TURN_RATE = 0.1  # radians per tick
 
+# --- Collision ---
+COLLISION_DAMAGE = 2  # HP lost per tick of overlap (both parties)
+
 # --- Bullet ---
 BULLET_RADIUS = 3
 BULLET_SPEED = 6.0

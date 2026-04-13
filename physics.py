@@ -65,6 +65,7 @@ def batch_robot_collisions(robots: list[Robot]):
     if len(pairs_i) == 0:
         return
 
+    dmg = settings.COLLISION_DAMAGE
     for idx in range(len(pairs_i)):
         i, j = pairs_i[idx], pairs_j[idx]
         d = diff[i, j]
@@ -73,6 +74,9 @@ def batch_robot_collisions(robots: list[Robot]):
         push = d * (overlap * 0.5 / dist)
         alive[i].pos += push
         alive[j].pos -= push
+        # Collision damage — both take damage, no hit bonus
+        alive[i].take_damage(dmg)
+        alive[j].take_damage(dmg)
 
 
 def batch_bullet_robot_collisions(bullets: list[Bullet], robots: list[Robot]):
@@ -169,6 +173,8 @@ def robot_blocked_by_wall(robot: Robot, base: Base) -> bool:
         diff = robot.pos - base.center
         norm = diff / (np.linalg.norm(diff) + 0.001)
         robot.pos = base.center + norm * wall_outer
+        # Collision damage for pressing into wall
+        robot.take_damage(settings.COLLISION_DAMAGE)
         return True
     return False
 

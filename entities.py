@@ -34,10 +34,15 @@ class Robot:
     distance_traveled: float = 0.0
     resources_collected: int = 0
     scans_enemy: int = 0
-    cum_dist_to_enemy: float = 0.0
-    cum_dist_to_friend: float = 0.0
-    cum_dist_to_ebase: float = 0.0
-    cum_dist_to_fbase: float = 0.0
+    # Delta-based distance tracking: initial distance and best (minimum) distance reached
+    init_dist_to_enemy: float = -1.0   # -1 = not yet recorded
+    init_dist_to_friend: float = -1.0
+    init_dist_to_ebase: float = -1.0
+    init_dist_to_fbase: float = -1.0
+    best_dist_to_enemy: float = float('inf')
+    best_dist_to_friend: float = float('inf')
+    best_dist_to_ebase: float = float('inf')
+    best_dist_to_fbase: float = float('inf')
 
     def __post_init__(self):
         if self.velocity is None:

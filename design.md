@@ -56,6 +56,10 @@ Players assemble robots from small modular blocks. Each block adds to the robot'
 
 Robots use a **single HP pool** — no per-block damage. Every block contributes 20 HP to the pool, except Armor (PLAIN) blocks which contribute 40 HP (double). When HP reaches zero the robot dies. All modules remain fully functional until death — sensors, engines, weapons, radars all work at full capacity the entire time. This keeps the neural network's input/output contract stable throughout combat, which is critical for small GA-evolved brains that can't adapt to degraded modules mid-fight.
 
+### Collision Damage
+
+Robots take **2 HP per tick** of overlap when colliding with other robots or pressing into a base wall. Both parties take damage on robot-robot collisions. Collision damage counts toward `hits_taken` (penalized by the "Damage taken" fitness weight) but does **not** count as a hit dealt — no attacker gets credit. This creates a natural standoff distance: bots must get close enough to shoot but not so close they ram and take free damage. Prevents stacking on top of enemies or parking against the base wall.
+
 ### Design Constraints
 
 - More blocks = higher resource cost per spawn
@@ -85,7 +89,7 @@ These require no module — they are inherent to having a body.
 Every robot on the battlefield and in training zones displays real-time perception overlays:
 
 - **Sensor cones** — each SENSOR block projects a visible 60° cone (two edge lines + arc) in cyan, showing its detection range and facing direction. Multiple sensors show multiple cones.
-- **Health bar** — thin bar above the robot. Color shifts from green (full HP) through yellow to red (low HP) against a dark red background.
+- **Health bar** — thin bar above the robot, only shown after taking damage. Color shifts from green (full HP) through yellow to red (low HP) against a dark red background. Hidden at full HP to reduce visual noise.
 - **Speed arrow** — gray line extending from the robot in its movement direction, length proportional to current speed (hidden when stationary).
 
 These overlays help the player understand what their bots perceive and how they behave, both during training and on the battlefield.
@@ -156,14 +160,14 @@ The player configures fitness by adjusting weights on predefined components. Eve
 - **Hit friend** (default -30): reward/punish landing hits on friendlies (tracked separately from enemy hits)
 - **Survival** (default +0.1): reward/punish per tick alive
 - **Damage taken** (default -5): reward/punish per hit received
-- **Dist to enemy** (default 0): reward/punish based on average distance to nearest enemy robot (inverted: 1=close, 0=far). Positive = reward approaching enemies.
-- **Dist to friend** (default 0): reward/punish based on average distance to nearest friendly robot. Positive = reward staying in formation.
-- **Dist to eBase** (default 0): reward/punish based on average distance to enemy base. Positive = reward pushing toward enemy base.
-- **Dist to fBase** (default 0): reward/punish based on average distance to friendly base. Positive = reward staying near home / defending.
+- **Dist to enemy** (default 0): reward/punish based on how much closer the robot got to the nearest enemy compared to its spawn distance. Uses delta-based scoring: `sqrt((initial_dist - best_dist) / initial_dist)`. The square root curve rewards getting closer when already close more than initial approach. 0 = never moved closer, 1 = reached the target. A bot that spawns close and sits still scores 0.
+- **Dist to friend** (default 0): same delta-based scoring toward nearest friendly robot. Positive = reward closing distance to allies.
+- **Dist to eBase** (default 0): same delta-based scoring toward enemy base. Positive = reward pushing toward enemy base.
+- **Dist to fBase** (default 0): same delta-based scoring toward friendly base. Positive = reward moving toward home / defending.
 - **Collect resources** (default 0): reward/punish per resource collected
 - **Scan enemy** (default 0): reward/punish per successful scanner hit on an enemy robot (friends cannot be scanned)
 
-All distance metrics are accumulated per-tick over the robot's lifetime and averaged, so they reward sustained proximity rather than a lucky final position.
+All distance metrics use delta-based scoring: they compare the robot's best (closest) distance achieved against its initial spawn distance. This rewards active movement toward targets rather than lucky spawn positions.
 
 The mix of weights shapes what behavior evolves — aggressive, defensive, evasive, resource-focused, etc.
 

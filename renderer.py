@@ -123,26 +123,27 @@ class Renderer:
                     pygame.draw.line(self.screen, (60, 160, 220), prev, p, 1)
                     prev = p
 
-        # --- Health bar ---
-        bar_w = max(radius * 2, 12)
-        bar_h = max(2 * scale, 2)
-        bar_x = rx - bar_w / 2
-        bar_y = ry - radius - 4 * scale
+        # --- Health bar (only show after first hit) ---
         hp_frac = robot.hp / robot.max_hp if robot.max_hp > 0 else 0.0
-        # Background (dark red)
-        pygame.draw.rect(self.screen, (80, 20, 20),
-                         (int(bar_x), int(bar_y), int(bar_w), int(bar_h)))
-        # Fill (green -> yellow -> red)
-        if hp_frac > 0.5:
-            g = 200
-            r = int((1.0 - hp_frac) * 2 * 200)
-        else:
-            r = 200
-            g = int(hp_frac * 2 * 200)
-        fill_w = int(bar_w * hp_frac)
-        if fill_w > 0:
-            pygame.draw.rect(self.screen, (r, g, 40),
-                             (int(bar_x), int(bar_y), fill_w, int(bar_h)))
+        if hp_frac < 1.0:
+            bar_w = max(radius * 2, 12)
+            bar_h = max(2 * scale, 2)
+            bar_x = rx - bar_w / 2
+            bar_y = ry - radius - 4 * scale
+            # Background (dark red)
+            pygame.draw.rect(self.screen, (80, 20, 20),
+                             (int(bar_x), int(bar_y), int(bar_w), int(bar_h)))
+            # Fill (green -> yellow -> red)
+            if hp_frac > 0.5:
+                g = 200
+                r = int((1.0 - hp_frac) * 2 * 200)
+            else:
+                r = 200
+                g = int(hp_frac * 2 * 200)
+            fill_w = int(bar_w * hp_frac)
+            if fill_w > 0:
+                pygame.draw.rect(self.screen, (r, g, 40),
+                                 (int(bar_x), int(bar_y), fill_w, int(bar_h)))
 
         # --- Speed arrow ---
         speed = float(np.linalg.norm(robot.velocity))
