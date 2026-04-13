@@ -32,16 +32,13 @@ def _simple_sensor_readings(robots: list[Robot],
                             enemy_base_pos: np.ndarray | None = None,
                             ) -> list[np.ndarray | None]:
     """Simple O(N*S*N) sensor readings — faster than NumPy for N<30."""
+    arena_diag = math.sqrt(800**2 + 400**2)  # normalization constant
     results: list[np.ndarray | None] = [None] * len(robots)
     for i, robot in enumerate(robots):
         if not robot.alive:
             continue
         sensor_blocks = [b for b in robot.blocks if b.block_type == BlockType.SENSOR]
         radar_blocks = [b for b in robot.blocks if b.block_type == BlockType.RADAR]
-        if not sensor_blocks and not radar_blocks:
-            results[i] = np.zeros(robot.blueprint.brain_input_size, dtype=np.float32)
-            continue
-
         readings = []
 
         # --- Directional sensors ---
@@ -101,7 +98,6 @@ def _simple_sensor_readings(robots: list[Robot],
                     friends.append(entry)
             enemies.sort()
             friends.sort()
-            arena_diag = math.sqrt(800**2 + 400**2)  # normalization constant
 
             for r_idx, radar in enumerate(radar_blocks):
                 if not radar.alive:
@@ -151,6 +147,11 @@ def _simple_sensor_readings(robots: list[Robot],
                     angle = (angle + math.pi) % (2 * math.pi) - math.pi
                     readings.append(angle / math.pi)
                     readings.append(1.0 - min(d / arena_diag, 1.0))
+
+        # --- Intrinsic inputs: speed, health (always present) ---
+        speed = float(np.linalg.norm(robot.velocity))
+        readings.append(speed / settings.ROBOT_DEFAULT_SPEED)  # 0..1
+        readings.append(robot.hp / robot.max_hp if robot.max_hp > 0 else 0.0)  # 0..1
 
         results[i] = np.array(readings, dtype=np.float32)
     return results
@@ -424,7 +425,6 @@ class TrainingArena:
             output_size=bp.brain_output_size,
             elite_count=settings.ELITE_COUNT,
             mutation_rate=settings.MUTATION_RATE,
-            mutation_decay=settings.MUTATION_DECAY,
         )
         self.best_brains[slot] = None
         self.last_best_fitness[slot] = 0.0
@@ -713,7 +713,7 @@ def _pack_robots(arena: TrainingArena) -> list[tuple]:
         blocks = [(b.grid_x, b.grid_y, b.block_type.value, True, 1.0, 1.0)
                   for b in r.blocks]
         result.append((r.pos[0], r.pos[1], r.angle, r.team, r.alive, blocks,
-                        r.hp, r.max_hp))
+                        r.hp, r.max_hp, r.velocity[0], r.velocity[1], r.radius))
     return result
 
 
@@ -829,6 +829,14 @@ class _RenderRobot:
     team: int
     alive: bool
     blocks: list  # list[_RenderBlock]
+    hp: float = 1.0
+    max_hp: float = 1.0
+    velocity: np.ndarray = field(default=None)
+    radius: float = 10.0
+
+    def __post_init__(self):
+        if self.velocity is None:
+            self.velocity = np.zeros(2, dtype=np.float32)
 
 
 @dataclass
@@ -945,6 +953,11 @@ class TrainingZoneProxy:
         self._robots = []
         for robot_data in snapshot['robots']:
             x, y, angle, team, alive, blocks_data = robot_data[:6]
+            hp = robot_data[6] if len(robot_data) > 6 else 1.0
+            max_hp = robot_data[7] if len(robot_data) > 7 else 1.0
+            vx = robot_data[8] if len(robot_data) > 8 else 0.0
+            vy = robot_data[9] if len(robot_data) > 9 else 0.0
+            radius = robot_data[10] if len(robot_data) > 10 else 10.0
             blocks = [
                 _RenderBlock(gx, gy, BlockType(bt))
                 for gx, gy, bt, *_ in blocks_data
@@ -952,6 +965,9 @@ class TrainingZoneProxy:
             self._robots.append(_RenderRobot(
                 pos=np.array([x, y], dtype=np.float32),
                 angle=angle, team=team, alive=alive, blocks=blocks,
+                hp=hp, max_hp=max_hp,
+                velocity=np.array([vx, vy], dtype=np.float32),
+                radius=radius,
             ))
 
         self._bullets = []

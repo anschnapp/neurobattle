@@ -216,9 +216,6 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
     for ai, (orig_idx, robot) in enumerate(alive):
         sensor_blocks = [b for b in robot.blocks if b.block_type == BlockType.SENSOR]
         radar_blocks = [b for b in robot.blocks if b.block_type == BlockType.RADAR]
-        if not sensor_blocks and not radar_blocks:
-            results[orig_idx] = np.zeros(robot.blueprint.brain_input_size, dtype=np.float32)
-            continue
 
         readings = []
 
@@ -329,6 +326,11 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
                     angle = (angle + math.pi) % (2 * math.pi) - math.pi
                     readings.append(angle / math.pi)
                     readings.append(1.0 - min(d / arena_diag, 1.0))
+
+        # --- Intrinsic inputs: speed, health (always present) ---
+        speed = float(np.linalg.norm(robot.velocity))
+        readings.append(speed / settings.ROBOT_DEFAULT_SPEED)  # 0..1
+        readings.append(robot.hp / robot.max_hp if robot.max_hp > 0 else 0.0)  # 0..1
 
         results[orig_idx] = np.array(readings, dtype=np.float32)
 

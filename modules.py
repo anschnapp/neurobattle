@@ -136,13 +136,12 @@ class RobotBlueprint:
     def brain_input_size(self) -> int:
         """Each sensor provides 2 inputs: [distance, type].
         Each radar provides 4 inputs: [enemy_angle, enemy_dist, friend_angle, friend_dist].
+        +2 intrinsic inputs always present: [speed, health].
         """
         n_sensors = len(self.sensors)
         n_radars = sum(1 for b in self.blocks if b.block_type == BlockType.RADAR)
         has_beacon = any(b.block_type == BlockType.BEACON for b in self.blocks)
-        total = n_sensors * 2 + n_radars * 4 + (4 if has_beacon else 0)
-        if total == 0:
-            return 1  # minimal dummy input (robot is blind)
+        total = n_sensors * 2 + n_radars * 4 + (4 if has_beacon else 0) + 2  # +2 for speed, health
         return total
 
     @property

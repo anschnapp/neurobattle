@@ -76,20 +76,19 @@ POINT_SENSOR_RANGE = 150.0  # detection range for PointSensor
 DEFAULT_HIDDEN_SIZE = 16
 
 # --- Evolution ---
-POPULATION_SIZE = 30
-ELITE_COUNT = 5
-MUTATION_RATE = 0.3
-MUTATION_DECAY = 0.995  # rate decreases slightly each generation
+POPULATION_SIZE = 20
+ELITE_COUNT = 3
+MUTATION_RATE = 0.1
 
 # --- Training ---
 TRAINING_TICKS_PER_GENERATION = 300  # how many sim ticks per generation eval
 TRAINING_ZONE_SIM_WIDTH = 800   # sim coords for single training zone
 TRAINING_ZONE_SIM_HEIGHT = 400
-TRAINING_STUDENT_COUNT = 10
+TRAINING_STUDENT_COUNT = 20
 TRAINING_TICKS_PER_FRAME = 3  # training runs faster than real-time
 TRAINING_RENDER_INTERVAL = 3  # only redraw training strips every N frames
 TRAINING_SETUP_TICKS = 15 * FPS  # 15 seconds setup before training starts
-TRAINING_CONFIG_PANEL_WIDTH = 350  # pixels for the config panel in the strip
+TRAINING_CONFIG_PANEL_WIDTH = 480  # pixels for the config panel in the strip
 
 # --- Gatherer / Resources ---
 GATHERER_RANGE = 80.0       # magnetic pull radius per gatherer block

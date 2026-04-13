@@ -482,8 +482,9 @@ class AssemblyScreen:
                 labels.append(f"R{radar_idx} fDst")
         if any(b.block_type == BlockType.BEACON for b in bp.blocks):
             labels.extend(["B eAng", "B eDst", "B fAng", "B fDst"])
-        if not labels:
-            labels.append("(blind)")
+        # Intrinsic inputs (always present)
+        labels.append("Speed")
+        labels.append("Health")
         return labels
 
     def _get_output_labels(self, bp: RobotBlueprint) -> list[str]:

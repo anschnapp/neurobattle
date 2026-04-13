@@ -86,12 +86,86 @@ class Renderer:
         end_y = ty + int(math.sin(aim) * 12)
         pygame.draw.line(self.screen, settings.WHITE, (tx, ty), (end_x, end_y), 2)
 
+    def _draw_robot_perception(self, robot: Robot, ox: int, oy: int, scale: float = 1.0):
+        """Draw sensor cones, health bar, and speed arrow for a robot."""
+        rx = robot.pos[0] * scale + ox
+        ry = robot.pos[1] * scale + oy
+        radius = robot.radius * scale
+
+        # --- Sensor cones (only for full Robot objects with block methods) ---
+        if hasattr(robot, 'get_block_world_pos'):
+            for block in robot.blocks:
+                if block.block_type != BlockType.SENSOR:
+                    continue
+                s_pos = robot.get_block_world_pos(block)
+                sx = s_pos[0] * scale + ox
+                sy = s_pos[1] * scale + oy
+                s_angle = robot.get_block_world_angle(block)
+                s_range = block.sensor_range * scale
+                half_fov = block.sensor_fov / 2
+
+                # Cone edges
+                a1 = s_angle - half_fov
+                a2 = s_angle + half_fov
+                tip = (int(sx), int(sy))
+                p1 = (int(sx + math.cos(a1) * s_range), int(sy + math.sin(a1) * s_range))
+                p2 = (int(sx + math.cos(a2) * s_range), int(sy + math.sin(a2) * s_range))
+                # Draw cone as lines
+                pygame.draw.line(self.screen, (60, 160, 220), tip, p1, 1)
+                pygame.draw.line(self.screen, (60, 160, 220), tip, p2, 1)
+                # Arc along the outer edge
+                n_segs = 6
+                prev = p1
+                for i in range(1, n_segs + 1):
+                    t = i / n_segs
+                    a = a1 + t * (a2 - a1)
+                    p = (int(sx + math.cos(a) * s_range), int(sy + math.sin(a) * s_range))
+                    pygame.draw.line(self.screen, (60, 160, 220), prev, p, 1)
+                    prev = p
+
+        # --- Health bar ---
+        bar_w = max(radius * 2, 12)
+        bar_h = max(2 * scale, 2)
+        bar_x = rx - bar_w / 2
+        bar_y = ry - radius - 4 * scale
+        hp_frac = robot.hp / robot.max_hp if robot.max_hp > 0 else 0.0
+        # Background (dark red)
+        pygame.draw.rect(self.screen, (80, 20, 20),
+                         (int(bar_x), int(bar_y), int(bar_w), int(bar_h)))
+        # Fill (green -> yellow -> red)
+        if hp_frac > 0.5:
+            g = 200
+            r = int((1.0 - hp_frac) * 2 * 200)
+        else:
+            r = 200
+            g = int(hp_frac * 2 * 200)
+        fill_w = int(bar_w * hp_frac)
+        if fill_w > 0:
+            pygame.draw.rect(self.screen, (r, g, 40),
+                             (int(bar_x), int(bar_y), fill_w, int(bar_h)))
+
+        # --- Speed arrow ---
+        speed = float(np.linalg.norm(robot.velocity))
+        if speed > 0.15:
+            speed_frac = min(speed / settings.ROBOT_DEFAULT_SPEED, 1.0)
+            arrow_len = (radius + 8) * speed_frac * scale
+            vx = robot.velocity[0] / speed
+            vy = robot.velocity[1] / speed
+            ax = rx + vx * (radius * scale + 2)
+            ay = ry + vy * (radius * scale + 2)
+            ex = ax + vx * arrow_len
+            ey = ay + vy * arrow_len
+            pygame.draw.line(self.screen, (180, 180, 180), (int(ax), int(ay)), (int(ex), int(ey)), 1)
+
     def draw_robot(self, robot: Robot, offset_x: int = 0, offset_y: int = 0):
         if not robot.alive:
             return
 
         oy = offset_y if offset_y else settings.BATTLEFIELD_Y
         ox = offset_x
+
+        # Draw perception overlays behind the robot
+        self._draw_robot_perception(robot, ox, oy)
 
         team_color = settings.TEAM_COLORS[robot.team]
         cos_a = math.cos(robot.angle)
@@ -237,7 +311,13 @@ class Renderer:
         # Three-column layout: spawn (left), config (center), fitness (right)
         row_h = 16
         row_y_start = panel_y + 20
-        col_w = panel_w // 3
+        # Per-column widths and value offsets (proportional to content)
+        spawn_col_w = 130
+        config_col_w = 170
+        fitness_col_w = panel_w - spawn_col_w - config_col_w
+        spawn_val_off = 88
+        config_val_off = 98
+        fitness_val_off = 108
 
         # Resource display in header area
         res_txt = f"${int(ui.resources)}"
@@ -260,7 +340,7 @@ class Renderer:
 
             if is_selected:
                 pygame.draw.rect(self.screen, (40, 40, 60),
-                                 (spawn_x, ry, col_w - 4, row_h))
+                                 (spawn_x, ry, spawn_col_w - 4, row_h))
                 indicator = ">"
             else:
                 indicator = " "
@@ -289,10 +369,10 @@ class Renderer:
             txt = f"{indicator} {label}:"
             self.screen.blit(self.small_font.render(txt, True, label_color), (spawn_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),
-                             (spawn_x + 80, ry + 1))
+                             (spawn_x + spawn_val_off, ry + 1))
 
         # --- Config column (center, col 1) ---
-        cfg_x = panel_x + col_w
+        cfg_x = panel_x + spawn_col_w
         for row in range(ui.NUM_CONFIG_ROWS):
             ry = row_y_start + row * row_h
             if ry + row_h > strip_y + strip_h:
@@ -304,7 +384,7 @@ class Renderer:
 
             if is_selected:
                 pygame.draw.rect(self.screen, (40, 40, 60),
-                                 (cfg_x, ry, col_w - 4, row_h))
+                                 (cfg_x, ry, config_col_w - 4, row_h))
                 indicator = ">"
             else:
                 indicator = " "
@@ -315,20 +395,20 @@ class Renderer:
             txt = f"{indicator} {label}:"
             self.screen.blit(self.small_font.render(txt, True, label_color), (cfg_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),
-                             (cfg_x + 80, ry + 1))
+                             (cfg_x + config_val_off, ry + 1))
 
             # Show slot generation counts on the design row
             if row == ui.ROW_DESIGN:
                 slot_gens = stats.get('slot_generations', {})
                 for s in range(3):
-                    sx = cfg_x + 105 + s * 35
+                    sx = cfg_x + config_val_off + 48 + s * 35
                     sg = slot_gens.get(s, 0)
                     sc = team_color if s == slot else settings.MID_GRAY
                     slot_txt = f"B{s+1}:G{sg}"
                     self.screen.blit(self.small_font.render(slot_txt, True, sc), (sx, ry + 1))
 
         # --- Fitness column (right, col 2) ---
-        fit_x = panel_x + col_w * 2
+        fit_x = panel_x + spawn_col_w + config_col_w
         for row in range(ui.NUM_FITNESS_ROWS):
             ry = row_y_start + row * row_h
             if ry + row_h > strip_y + strip_h:
@@ -340,7 +420,7 @@ class Renderer:
 
             if is_selected:
                 pygame.draw.rect(self.screen, (40, 40, 60),
-                                 (fit_x, ry, col_w - 4, row_h))
+                                 (fit_x, ry, fitness_col_w - 4, row_h))
                 indicator = ">"
             else:
                 indicator = " "
@@ -362,7 +442,7 @@ class Renderer:
             txt = f"{indicator} {label}:"
             self.screen.blit(self.small_font.render(txt, True, label_color), (fit_x, ry + 1))
             self.screen.blit(self.small_font.render(value, True, value_color),
-                             (fit_x + 80, ry + 1))
+                             (fit_x + fitness_val_off, ry + 1))
 
         # --- Arena viewport (right side) ---
         vp_x = panel_w + 4
@@ -437,6 +517,9 @@ class Renderer:
         for robot in zone.all_robots:
             if not robot.alive:
                 continue
+
+            # Draw perception overlays (scaled)
+            self._draw_robot_perception(robot, int(ox), int(oy), scale)
 
             is_student = robot.team == 0
             team_color = settings.TEAM_COLORS[player_id] if is_student else (150, 80, 80)

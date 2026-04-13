@@ -71,23 +71,43 @@ Perception modules determine what the robot's brain receives as input. There are
 - **Radar (omnidirectional, unlimited range)** — detects the Nth nearest enemy and Nth nearest friend anywhere in the arena. Returns angle relative to robot facing (−1..1) + distance (inverted: 1=close, 0=far). 4 inputs per block. Multiple radars give awareness of multiple targets (1st radar = closest, 2nd = 2nd closest, etc.).
 - **Beacon (omnidirectional, unlimited range, max 1)** — detects enemy base and friendly base. Returns angle + distance for each. 4 inputs total. Gives the brain a sense of strategic direction.
 
+### Intrinsic Inputs
+
+Every robot always receives 2 additional brain inputs regardless of modules:
+
+- **Speed** (0..1) — current speed normalized to max speed. Lets the brain learn to brake, accelerate, or maintain speed.
+- **Health** (0..1) — current HP / max HP. Lets the brain evolve retreat or kamikaze behavior based on remaining health.
+
+These require no module — they are inherent to having a body.
+
+## Robot Visual Feedback
+
+Every robot on the battlefield and in training zones displays real-time perception overlays:
+
+- **Sensor cones** — each SENSOR block projects a visible 60° cone (two edge lines + arc) in cyan, showing its detection range and facing direction. Multiple sensors show multiple cones.
+- **Health bar** — thin bar above the robot. Color shifts from green (full HP) through yellow to red (low HP) against a dark red background.
+- **Speed arrow** — gray line extending from the robot in its movement direction, length proportional to current speed (hidden when stationary).
+
+These overlays help the player understand what their bots perceive and how they behave, both during training and on the battlefield.
+
 ## Neural Network Architecture
 
 - **Type:** small feedforward network (not recurrent, not deep learning)
-- **Inputs:** auto-determined by perception modules on the robot (sensors: 2 per block, radars: 4 per block, beacon: 4 if present)
+- **Inputs:** auto-determined by perception modules on the robot (sensors: 2 per block, radars: 4 per block, beacon: 4 if present) + 2 intrinsic inputs always present (speed, health)
 - **Hidden layers:** 1-2 layers, size chosen by player during assembly (e.g. 8, 16, 32 neurons)
 - **Outputs:** auto-determined by engine/weapon modules on the robot (move direction x/y, shoot yes/no, aim direction — ~4-6 floats)
 - **Activation:** tanh (squashes values to -1..1)
 - **Weights/biases:** plain NumPy arrays of floats — this IS the brain
 - **Forward pass:** `hidden = tanh(inputs @ weights1 + bias1)` then `outputs = tanh(hidden @ weights2 + bias2)`
 - **No backpropagation.** Training is purely evolutionary (genetic algorithm).
+- **Evolution:** population of 20 brains per design. Each generation: top 3 elites survive unchanged, remaining 17 are produced by uniform crossover (each weight randomly from one of two top-half parents) + sparse mutation (gaussian noise with σ=0.1 applied to ~20% of weights). No mutation decay — constant exploration rate.
 
 ### Network Configuration (During Assembly)
 
 The hidden layer size is locked during robot assembly — it cannot be changed after training begins, since changing the architecture invalidates all evolved weights.
 
 The assembly screen shows a **live network visualization** for each robot design (implemented):
-- **Input nodes** (left, green) — auto-determined by perception modules. Sensors: 2 inputs each, labels `S(R) dist`, `S(R) type`. Radars: 4 inputs each, labels `R1 eAng`, `R1 eDst`, `R1 fAng`, `R1 fDst`. Beacon: 4 inputs, labels `B eAng`, `B eDst`, `B fAng`, `B fDst`. Updates in real time as modules are added/removed.
+- **Input nodes** (left, green) — auto-determined by perception modules. Sensors: 2 inputs each, labels `S(R) dist`, `S(R) type`. Radars: 4 inputs each, labels `R1 eAng`, `R1 eDst`, `R1 fAng`, `R1 fDst`. Beacon: 4 inputs, labels `B eAng`, `B eDst`, `B fAng`, `B fDst`. Always includes 2 intrinsic inputs: `Speed` (0..1, normalized to max speed) and `Health` (0..1, current/max HP). Updates in real time as modules are added/removed.
 - **Hidden layer nodes** (center, blue) — player cycles through options (4, 8, 12, 16, 24, 32) using primary/secondary on the network row below the grid. A **suggested size** is shown based on `max(8, (inputs + outputs) * 1.5)`.
 - **Output nodes** (right, orange) — auto-determined by engine/weapon modules. Each engine = 1 output, each weapon = 1 output. Labels show type and direction, e.g. `E(L)`, `W(R)`.
 - **Connections** — faded lines drawn between layers, showing density. A compact 4-8-3 network looks clean. A sprawling 12-32-6 network looks visually dense — communicating "harder to train" through the visualization itself.
@@ -119,13 +139,13 @@ Training is free (no resource cost). Each player has a **single training zone** 
 
 ### Training Flow
 
-1. **10 "student" robots** of the currently selected design are spawned in the zone.
+1. **20 "student" robots** of the currently selected design are spawned in the zone.
 2. The player seeds the zone with **sparring partners**:
    - Own robots assigned as **friend** or **enemy** (any of the player's 3 designs)
    - Scanned enemy robots as enemies (locked to the generation that was scanned)
    - Player chooses how many sparring partners to include
 3. The round plays out until a time limit or all robots are dead.
-4. The best-performing students survive, are mutated, and form the next generation.
+4. The best-performing students survive as elites. The rest are produced via crossover of two top-half parents + sparse mutation.
 5. Repeat.
 
 ### Fitness Function
@@ -265,7 +285,7 @@ Last designs are saved to `last_designs.json` on match start and auto-loaded on 
 - `modules.py` — block-based robot system (PLAIN/ENGINE/WEAPON/SENSOR/SCANNER/GATHERER/RADAR/BEACON), blueprints, serialize/deserialize
 - `entities.py` — Robot (block-based), Bullet, Base, Turret
 - `physics.py` — vectorized NumPy: batch sensors (directional sensors + radar + beacon), collisions (robot-robot, bullet-robot, bullet-base)
-- `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports
+- `renderer.py` — Pygame drawing: blocks, bases, bullets, HUD, training arena viewports, robot perception overlays (sensor cones, health bars, speed arrows)
 - `assembly.py` — pre-game robot assembly screen (side-by-side, grid editor, cursor, slot tabs, ready flow, save/load designs, live network visualization with input/output labels, hidden size selector with suggestions, param count)
 - `main.py` — game loop with ASSEMBLY → MATCH phase state machine
 - `training.py` — single training zone per player with configurable sparring and fitness. One zone trains one design at a time with hot-swap (populations preserved per design). Zone runs in its own subprocess via `multiprocessing` (spawn context). Worker ticks at 3× game speed (rate-limited), sends render snapshots + best brains through Pipes, receives config updates. Main process holds `TrainingZoneProxy` (render data) + `TrainingZoneUI` (player input handling with two-column cursor navigation and key repeat). Config panel on left (350px) split into three columns: spawn actions, training config, fitness sliders. Arena viewport on right. Lightweight pure-Python physics for small entity counts, including radar/beacon input computation with per-player base positions. Training zones include visible friendly and enemy bases matching the player's game-side layout (P1: friendly left/enemy right, P2: friendly right/enemy left); students spawn near their friendly base, enemies near the enemy base. Base positions feed into beacon inputs and distance fitness metrics. **Training zone config:** active design selector, enemy sparring type/count, friend sparring type/count, resource drop count (for gatherer training), spawn distance (close/medium/far), 10 fitness weight sliders (hit enemy, hit friend, survival, damage taken, dist to enemy, dist to friend, dist to enemy base, dist to friendly base, collect resources, scan enemy). Distance fitness metrics use per-tick accumulation of actual distances (not positional proxies). 15-second setup period at match start (training paused, player configures). Resource drops are yellow collectibles gathered magnetically by GATHERER blocks.
