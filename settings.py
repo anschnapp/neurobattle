@@ -84,9 +84,9 @@ ELITE_COUNT = 3
 MUTATION_RATE = 0.1
 
 # --- Training ---
-TRAINING_TICKS_PER_GENERATION = 300  # how many sim ticks per generation eval
-TRAINING_ZONE_SIM_WIDTH = 800   # sim coords for single training zone
-TRAINING_ZONE_SIM_HEIGHT = 400
+TRAINING_TICKS_PER_GENERATION = 600  # how many sim ticks per generation eval
+TRAINING_ZONE_SIM_WIDTH = ARENA_WIDTH    # match battlefield dimensions
+TRAINING_ZONE_SIM_HEIGHT = ARENA_HEIGHT  # so trained behavior transfers
 TRAINING_STUDENT_COUNT = 20
 TRAINING_TICKS_PER_FRAME = 3  # training runs faster than real-time
 TRAINING_RENDER_INTERVAL = 3  # only redraw training strips every N frames

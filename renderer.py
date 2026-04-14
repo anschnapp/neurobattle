@@ -451,10 +451,6 @@ class Renderer:
         vp_w = settings.SCREEN_WIDTH - panel_w - 8
         vp_h = strip_h - 8
 
-        # Viewport background
-        pygame.draw.rect(self.screen, (20, 20, 28), (vp_x, vp_y, vp_w, vp_h))
-        pygame.draw.rect(self.screen, (50, 50, 60), (vp_x, vp_y, vp_w, vp_h), 1)
-
         # Scale from sim coords to viewport
         scale_x = vp_w / zone.width
         scale_y = vp_h / zone.height
@@ -463,6 +459,12 @@ class Renderer:
         scaled_h = zone.height * scale
         ox = vp_x + (vp_w - scaled_w) / 2
         oy = vp_y + (vp_h - scaled_h) / 2
+
+        # Viewport background — only the actual rendered area
+        pygame.draw.rect(self.screen, (20, 20, 28),
+                         (int(ox), int(oy), int(scaled_w), int(scaled_h)))
+        pygame.draw.rect(self.screen, (50, 50, 60),
+                         (int(ox), int(oy), int(scaled_w), int(scaled_h)), 1)
 
         # Draw bases
         base_r = int(settings.BASE_RADIUS * scale)

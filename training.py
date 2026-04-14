@@ -30,9 +30,12 @@ import settings
 def _simple_sensor_readings(robots: list[Robot],
                             friendly_base_pos: np.ndarray | None = None,
                             enemy_base_pos: np.ndarray | None = None,
+                            num_students: int = 0,
                             ) -> list[np.ndarray | None]:
-    """Simple O(N*S*N) sensor readings — faster than NumPy for N<30."""
-    arena_diag = math.sqrt(800**2 + 400**2)  # normalization constant
+    """Simple O(N*S*N) sensor readings — faster than NumPy for N<30.
+    Students (indices 0..num_students-1) are invisible to each other."""
+    arena_diag = math.sqrt(settings.TRAINING_ZONE_SIM_WIDTH**2 +
+                           settings.TRAINING_ZONE_SIM_HEIGHT**2)
     results: list[np.ndarray | None] = [None] * len(robots)
     for i, robot in enumerate(robots):
         if not robot.alive:
@@ -60,6 +63,9 @@ def _simple_sensor_readings(robots: list[Robot],
             for j, other in enumerate(robots):
                 if j == i or not other.alive:
                     continue
+                # Students are invisible to each other
+                if i < num_students and j < num_students:
+                    continue
                 dx = other.pos[0] - s_pos[0]
                 dy = other.pos[1] - s_pos[1]
                 d = math.sqrt(dx * dx + dy * dy)
@@ -81,6 +87,9 @@ def _simple_sensor_readings(robots: list[Robot],
             friends = []
             for j, other in enumerate(robots):
                 if j == i or not other.alive:
+                    continue
+                # Students are invisible to each other
+                if i < num_students and j < num_students:
                     continue
                 dx = other.pos[0] - robot.pos[0]
                 dy = other.pos[1] - robot.pos[1]
@@ -157,8 +166,9 @@ def _simple_sensor_readings(robots: list[Robot],
     return results
 
 
-def _simple_robot_collisions(robots: list[Robot]):
-    """Simple pairwise push with collision damage — faster than NumPy for N<30."""
+def _simple_robot_collisions(robots: list[Robot], num_students: int = 0):
+    """Simple pairwise push with collision damage — faster than NumPy for N<30.
+    Students (indices 0..num_students-1) don't collide with each other."""
     n = len(robots)
     dmg = settings.COLLISION_DAMAGE
     for i in range(n):
@@ -166,6 +176,9 @@ def _simple_robot_collisions(robots: list[Robot]):
             continue
         for j in range(i + 1, n):
             if not robots[j].alive:
+                continue
+            # Students are invisible to each other
+            if i < num_students and j < num_students:
                 continue
             dx = robots[i].pos[0] - robots[j].pos[0]
             dy = robots[i].pos[1] - robots[j].pos[1]
@@ -362,11 +375,12 @@ class TrainingArena:
         self.width = settings.TRAINING_ZONE_SIM_WIDTH
         self.height = settings.TRAINING_ZONE_SIM_HEIGHT
 
-        # Base positions matching the game layout for this player
-        base_margin = 60.0
+        # Base positions matching the battlefield layout for this player
         cy = self.height * 0.5
-        left_base = np.array([base_margin, cy], dtype=np.float32)
-        right_base = np.array([self.width - base_margin, cy], dtype=np.float32)
+        left_base = np.array([float(settings.BASE_POSITIONS[0][0]), cy],
+                             dtype=np.float32)
+        right_base = np.array([float(settings.BASE_POSITIONS[1][0]), cy],
+                              dtype=np.float32)
         if player_id == 0:
             self.friendly_base_pos = left_base
             self.enemy_base_pos = right_base
@@ -459,11 +473,12 @@ class TrainingArena:
         student_angle = 0.0 if self.player_id == 0 else math.pi
         enemy_angle = math.pi if self.player_id == 0 else 0.0
 
-        # Spawn students
+        # Spawn students (random facing to force sensor-driven navigation)
         for i in range(n_students):
             pos = self._random_spawn_pos(team=0)
+            angle = np.random.uniform(-math.pi, math.pi)
             robot = Robot(
-                pos=pos, angle=student_angle, team=0,
+                pos=pos, angle=angle, team=0,
                 blueprint=bp,
                 brain=pop.brains[i].copy(),
             )
@@ -546,15 +561,17 @@ class TrainingArena:
 
         self.gen_tick += 1
 
-        alive_all = [r for r in self.students if r.alive] + \
-                    [r for r in self.sparring if r.alive]
+        alive_students = [r for r in self.students if r.alive]
+        alive_all = alive_students + [r for r in self.sparring if r.alive]
+        num_students = len(alive_students)
 
         if not alive_all:
             self._end_generation()
             return
 
         sensor_results = _simple_sensor_readings(
-            alive_all, self.friendly_base_pos, self.enemy_base_pos)
+            alive_all, self.friendly_base_pos, self.enemy_base_pos,
+            num_students)
         for i, robot in enumerate(alive_all):
             if sensor_results[i] is not None:
                 robot.think(sensor_results[i])
@@ -569,7 +586,7 @@ class TrainingArena:
             robot.update()
             clamp_to_arena(robot.pos, robot.radius, w, h)
 
-        _simple_robot_collisions(alive_all)
+        _simple_robot_collisions(alive_all, num_students)
 
         # Track distances for delta-based fitness (initial and best/minimum)
         alive_enemies = [r for r in self.sparring if r.alive and r.team != 0]
@@ -879,10 +896,11 @@ class TrainingZoneProxy:
         self._conn = conn
 
         # Base positions (initialized to match player side, updated from snapshots)
-        base_margin = 60.0
         cy = self.height * 0.5
-        left_base = np.array([base_margin, cy], dtype=np.float32)
-        right_base = np.array([self.width - base_margin, cy], dtype=np.float32)
+        left_base = np.array([float(settings.BASE_POSITIONS[0][0]), cy],
+                             dtype=np.float32)
+        right_base = np.array([float(settings.BASE_POSITIONS[1][0]), cy],
+                              dtype=np.float32)
         if player_id == 0:
             self.friendly_base_pos = left_base
             self.enemy_base_pos = right_base
