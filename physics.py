@@ -146,17 +146,14 @@ def batch_bullet_base_collisions(bullets: list[Bullet], bases: list[Base]):
         diff = bullet_pos - base.center[np.newaxis, :]  # (nb, 2)
         dist = np.sqrt(np.sum(diff * diff, axis=1))  # (nb,)
 
-        # Skip same-team bullets
-        enemy_mask = bullet_teams != base.team
-
         if base.wall_alive:
             wall_inner = base.radius - settings.BASE_WALL_THICKNESS
             wall_outer = base.radius + settings.BASE_WALL_THICKNESS
-            wall_hit = enemy_mask & (dist >= wall_inner) & (dist <= wall_outer)
+            wall_hit = (dist >= wall_inner) & (dist <= wall_outer)
             for bi in np.where(wall_hit)[0]:
                 hits.append((alive_bullets[bi][0], base_idx, 'wall'))
         elif base.commander_alive:
-            cmd_hit = enemy_mask & (dist < settings.COMMANDER_RADIUS + settings.BULLET_RADIUS)
+            cmd_hit = (dist < settings.COMMANDER_RADIUS + settings.BULLET_RADIUS)
             for bi in np.where(cmd_hit)[0]:
                 hits.append((alive_bullets[bi][0], base_idx, 'commander'))
 

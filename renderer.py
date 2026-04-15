@@ -129,18 +129,6 @@ class Renderer:
                 pygame.draw.rect(self.screen, (r, g, 40),
                                  (int(bar_x), int(bar_y), fill_w, int(bar_h)))
 
-        # --- Speed arrow ---
-        speed = float(np.linalg.norm(robot.velocity))
-        if speed > 0.15:
-            speed_frac = min(speed / settings.ROBOT_DEFAULT_SPEED, 1.0)
-            arrow_len = (radius + 8) * speed_frac * scale
-            vx = robot.velocity[0] / speed
-            vy = robot.velocity[1] / speed
-            ax = rx + vx * (radius * scale + 2)
-            ay = ry + vy * (radius * scale + 2)
-            ex = ax + vx * arrow_len
-            ey = ay + vy * arrow_len
-            pygame.draw.line(self.screen, (180, 180, 180), (int(ax), int(ay)), (int(ex), int(ey)), 1)
 
     def draw_robot(self, robot: Robot, offset_x: int = 0, offset_y: int = 0):
         if not robot.alive:

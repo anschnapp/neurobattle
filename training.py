@@ -227,8 +227,6 @@ def _simple_bullet_base_collisions(bullets: list[Bullet], bases: list[Base]):
             continue
         bx, by = bullet.pos[0], bullet.pos[1]
         for base in bases:
-            if bullet.team == base.team:
-                continue
             dx = bx - base.center[0]
             dy = by - base.center[1]
             dist = math.sqrt(dx * dx + dy * dy)
