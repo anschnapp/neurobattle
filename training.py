@@ -295,8 +295,7 @@ DEFAULT_FITNESS_WEIGHTS = {p[0]: p[2] for p in FITNESS_PARAMS}
 class TrainingZoneConfig:
     """Configuration for a training zone — sent to the worker process."""
     active_slot: int = 0
-    enemy_slot: int = 0       # which of player's 3 designs for enemy sparring
-    enemy_count: int = 3
+    enemy_counts: list = field(default_factory=lambda: [0, 0, 0])  # per enemy design
     friend_slot: int = -1     # -1 = none, 0-2 = design index
     friend_count: int = 0
     resource_count: int = 0   # scattered resource drops in the arena for gatherer training
@@ -306,8 +305,7 @@ class TrainingZoneConfig:
     def to_dict(self) -> dict:
         return {
             'active_slot': self.active_slot,
-            'enemy_slot': self.enemy_slot,
-            'enemy_count': self.enemy_count,
+            'enemy_counts': list(self.enemy_counts),
             'friend_slot': self.friend_slot,
             'friend_count': self.friend_count,
             'resource_count': self.resource_count,
@@ -319,8 +317,7 @@ class TrainingZoneConfig:
     def from_dict(d: dict) -> TrainingZoneConfig:
         return TrainingZoneConfig(
             active_slot=d['active_slot'],
-            enemy_slot=d['enemy_slot'],
-            enemy_count=d['enemy_count'],
+            enemy_counts=list(d.get('enemy_counts', [0, 0, 0])),
             friend_slot=d['friend_slot'],
             friend_count=d['friend_count'],
             resource_count=d.get('resource_count', 0),
@@ -420,9 +417,12 @@ class TrainingArena:
     """Single training zone — trains one design at a time, holds populations for all 3."""
 
     def __init__(self, player_id: int, blueprints: list[RobotBlueprint],
-                 config: TrainingZoneConfig):
+                 config: TrainingZoneConfig,
+                 enemy_blueprints: list[RobotBlueprint] | None = None):
         self.player_id = player_id
         self.blueprints = blueprints
+        self.enemy_blueprints = enemy_blueprints or [RobotBlueprint([], 8) for _ in range(3)]
+        self.enemy_brains: dict[int, Brain | None] = {0: None, 1: None, 2: None}
         self.config = config
         self.width = settings.TRAINING_ZONE_SIM_WIDTH
         self.height = settings.TRAINING_ZONE_SIM_HEIGHT
@@ -550,13 +550,17 @@ class TrainingArena:
             )
             self.students.append(robot)
 
-        # Spawn enemy sparring partners
-        enemy_slot = self.config.enemy_slot
-        if 0 <= enemy_slot < 3 and self.blueprints[enemy_slot].blocks:
-            enemy_bp = self.blueprints[enemy_slot]
-            for _ in range(self.config.enemy_count):
+        # Spawn enemy sparring partners (one entry per enemy design)
+        for enemy_slot in range(3):
+            count = self.config.enemy_counts[enemy_slot] if enemy_slot < len(self.config.enemy_counts) else 0
+            if count <= 0:
+                continue
+            enemy_bp = self.enemy_blueprints[enemy_slot]
+            if not enemy_bp.blocks:
+                continue
+            for _ in range(count):
                 pos = self._random_spawn_pos(team=1)
-                brain = self._get_sparring_brain(enemy_slot, enemy_bp)
+                brain = self._get_enemy_brain(enemy_slot, enemy_bp)
                 robot = Robot(
                     pos=pos, angle=enemy_angle, team=1,
                     blueprint=enemy_bp, brain=brain,
@@ -590,6 +594,13 @@ class TrainingArena:
         best = self.best_brains.get(slot)
         if best is not None:
             return best.copy()
+        return Brain(bp.brain_input_size, bp.hidden_size, bp.brain_output_size)
+
+    def _get_enemy_brain(self, slot: int, bp: RobotBlueprint) -> Brain:
+        """Get brain for an enemy sparring partner: scanned brain or random gen-0."""
+        scanned = self.enemy_brains.get(slot)
+        if scanned is not None:
+            return scanned.copy()
         return Brain(bp.brain_input_size, bp.hidden_size, bp.brain_output_size)
 
     def _random_spawn_pos(self, team: int) -> np.ndarray:
@@ -849,7 +860,8 @@ def _pack_resources(arena: TrainingArena) -> list[tuple]:
     return [(r.pos[0], r.pos[1]) for r in arena.resources if r.alive]
 
 
-def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connection.Connection):
+def _zone_worker(blueprint_dicts: list[dict], enemy_blueprint_dicts: list[dict],
+                  config_dict: dict, conn: mp.connection.Connection):
     """Training zone worker — runs in a subprocess.
 
     Commands from main process (received via conn):
@@ -857,12 +869,15 @@ def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connec
         'pause'             — pause simulation
         'resume'            — resume simulation
         ('config', dict)    — update training zone config
+        ('enemy_brain', slot, brain_dict) — update scanned enemy brain
     """
     import traceback
     try:
         blueprints = [RobotBlueprint.from_dict(d) for d in blueprint_dicts]
+        enemy_blueprints = [RobotBlueprint.from_dict(d) for d in enemy_blueprint_dicts]
         config = TrainingZoneConfig.from_dict(config_dict)
-        arena = TrainingArena(config_dict['player_id'], blueprints, config)
+        arena = TrainingArena(config_dict['player_id'], blueprints, config,
+                              enemy_blueprints=enemy_blueprints)
 
         last_gen = -1
         last_snapshot_time = 0.0
@@ -883,6 +898,14 @@ def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connec
                 elif isinstance(cmd, tuple) and cmd[0] == 'config':
                     new_config = TrainingZoneConfig.from_dict(cmd[1])
                     arena.apply_config(new_config)
+                elif isinstance(cmd, tuple) and cmd[0] == 'enemy_brain':
+                    slot = cmd[1]
+                    brain_dict = cmd[2]
+                    bp = arena.enemy_blueprints[slot]
+                    brain = Brain(brain_dict['input_size'], brain_dict['hidden_size'],
+                                  brain_dict['output_size'])
+                    brain.set_flat_weights(np.array(brain_dict['weights'], dtype=np.float32))
+                    arena.enemy_brains[slot] = brain
 
             # Rate-limit to 3x game speed (FPS * TRAINING_TICKS_PER_FRAME ticks/sec)
             now = time.monotonic()
@@ -1139,13 +1162,14 @@ class TrainingZoneUI:
 
     # Column 1: config rows
     ROW_DESIGN = 0
-    ROW_ENEMY_TYPE = 1
-    ROW_ENEMY_COUNT = 2
-    ROW_FRIEND_TYPE = 3
-    ROW_FRIEND_COUNT = 4
-    ROW_RESOURCES = 5
-    ROW_SPAWN_DIST = 6
-    NUM_CONFIG_ROWS = 7
+    ROW_ENEMY_1 = 1
+    ROW_ENEMY_2 = 2
+    ROW_ENEMY_3 = 3
+    ROW_FRIEND_TYPE = 4
+    ROW_FRIEND_COUNT = 5
+    ROW_RESOURCES = 6
+    ROW_SPAWN_DIST = 7
+    NUM_CONFIG_ROWS = 8
 
     # Column 2: fitness rows (indexed from 0 within the column)
     NUM_FITNESS_ROWS = len(FITNESS_PARAMS)
@@ -1165,8 +1189,9 @@ class TrainingZoneUI:
     # Labels for config column
     CONFIG_LABELS = [
         'Design',
-        'Enemy type',
-        'Enemy count',
+        'Enemy 1',
+        'Enemy 2',
+        'Enemy 3',
         'Friend type',
         'Friend count',
         'Resources',
@@ -1176,9 +1201,12 @@ class TrainingZoneUI:
     # Labels for fitness column
     FITNESS_LABELS = [p[1] for p in FITNESS_PARAMS]
 
-    def __init__(self, player_id: int, blueprints: list[RobotBlueprint]):
+    def __init__(self, player_id: int, blueprints: list[RobotBlueprint],
+                 enemy_blueprints: list[RobotBlueprint] | None = None):
         self.player_id = player_id
         self.blueprints = blueprints
+        self.enemy_blueprints = enemy_blueprints or [RobotBlueprint([], 8) for _ in range(3)]
+        self.enemy_scanned_gens: list[int] = [0, 0, 0]  # 0 = not scanned (gen 0 random brain)
         self.cursor_col = 0   # 0=spawn, 1=config, 2=fitness
         self.cursor_row = 0
         self.config = TrainingZoneConfig()
@@ -1194,7 +1222,6 @@ class TrainingZoneUI:
         for i in range(3):
             if blueprints[i].blocks:
                 self.config.active_slot = i
-                self.config.enemy_slot = i
                 break
 
         # Key repeat state
@@ -1281,13 +1308,15 @@ class TrainingZoneUI:
         if row == self.ROW_DESIGN:
             return self._cycle_slot('active_slot', direction)
 
-        elif row == self.ROW_ENEMY_TYPE:
-            return self._cycle_slot('enemy_slot', direction)
-
-        elif row == self.ROW_ENEMY_COUNT:
-            new = max(0, min(8, cfg.enemy_count + direction))
-            if new != cfg.enemy_count:
-                cfg.enemy_count = new
+        elif row in (self.ROW_ENEMY_1, self.ROW_ENEMY_2, self.ROW_ENEMY_3):
+            enemy_slot = row - self.ROW_ENEMY_1
+            # Only allow adjusting if enemy has a valid design
+            if not self.enemy_blueprints[enemy_slot].blocks:
+                return False
+            old = cfg.enemy_counts[enemy_slot]
+            new = max(0, min(8, old + direction))
+            if new != old:
+                cfg.enemy_counts[enemy_slot] = new
                 return True
 
         elif row == self.ROW_FRIEND_TYPE:
@@ -1352,10 +1381,13 @@ class TrainingZoneUI:
         cfg = self.config
         if row == self.ROW_DESIGN:
             return f"Bot {cfg.active_slot + 1}"
-        elif row == self.ROW_ENEMY_TYPE:
-            return f"Bot {cfg.enemy_slot + 1}"
-        elif row == self.ROW_ENEMY_COUNT:
-            return str(cfg.enemy_count)
+        elif row in (self.ROW_ENEMY_1, self.ROW_ENEMY_2, self.ROW_ENEMY_3):
+            enemy_slot = row - self.ROW_ENEMY_1
+            if not self.enemy_blueprints[enemy_slot].blocks:
+                return "(empty)"
+            count = cfg.enemy_counts[enemy_slot]
+            gen = self.enemy_scanned_gens[enemy_slot]
+            return f"{count} (G{gen})"
         elif row == self.ROW_FRIEND_TYPE:
             return "None" if cfg.friend_slot < 0 else f"Bot {cfg.friend_slot + 1}"
         elif row == self.ROW_FRIEND_COUNT:
@@ -1398,7 +1430,8 @@ class TrainingManager:
 
         for player_id in range(2):
             bps = player_blueprints[player_id]
-            ui = TrainingZoneUI(player_id, bps)
+            enemy_bps = player_blueprints[1 - player_id]
+            ui = TrainingZoneUI(player_id, bps, enemy_blueprints=enemy_bps)
             self.uis.append(ui)
 
             main_conn, worker_conn = ctx.Pipe()
@@ -1407,7 +1440,9 @@ class TrainingManager:
 
             p = ctx.Process(
                 target=_zone_worker,
-                args=([bp.to_dict() for bp in bps], config_dict, worker_conn),
+                args=([bp.to_dict() for bp in bps],
+                      [bp.to_dict() for bp in enemy_bps],
+                      config_dict, worker_conn),
                 daemon=True,
             )
             p.start()
@@ -1450,6 +1485,20 @@ class TrainingManager:
     def set_resources(self, player_id: int, amount: float):
         """Update the resource display for a player's UI."""
         self.uis[player_id].resources = amount
+
+    def update_scanned_enemy(self, player_id: int, enemy_slot: int,
+                             generation: int, brain: Brain):
+        """Update a player's scanned enemy brain (called when a scan succeeds)."""
+        ui = self.uis[player_id]
+        ui.enemy_scanned_gens[enemy_slot] = generation
+        # Send brain data to worker
+        brain_dict = {
+            'input_size': brain.input_size,
+            'hidden_size': brain.hidden_size,
+            'output_size': brain.output_size,
+            'weights': brain.get_flat_weights().tolist(),
+        }
+        self.zones[player_id].send_command(('enemy_brain', enemy_slot, brain_dict))
 
     def stop(self):
         for zone in self.zones:
