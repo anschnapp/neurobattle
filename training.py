@@ -20,7 +20,7 @@ import numpy as np
 from brain import Brain
 from evolution import Population
 from modules import RobotBlueprint, BlockType, BLOCK_PIXEL_SIZE
-from entities import Robot, Bullet
+from entities import Robot, Bullet, Base
 from physics import clamp_to_arena
 import settings
 
@@ -218,11 +218,63 @@ def _simple_bullet_collisions(bullets: list[Bullet], robots: list[Robot]):
     return hits
 
 
+def _simple_bullet_base_collisions(bullets: list[Bullet], bases: list[Base]):
+    """Simple bullet-base collision for training zones.
+    Returns list of (bullet_idx, base, hit_type) where hit_type is 'wall' or 'commander'."""
+    hits = []
+    for bi, bullet in enumerate(bullets):
+        if not bullet.alive:
+            continue
+        bx, by = bullet.pos[0], bullet.pos[1]
+        for base in bases:
+            if bullet.team == base.team:
+                continue
+            dx = bx - base.center[0]
+            dy = by - base.center[1]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if base.wall_alive:
+                wall_inner = base.radius - settings.BASE_WALL_THICKNESS
+                wall_outer = base.radius + settings.BASE_WALL_THICKNESS
+                if wall_inner <= dist <= wall_outer:
+                    hits.append((bi, base, 'wall'))
+                    break
+            elif base.commander_alive:
+                if dist < settings.COMMANDER_RADIUS + settings.BULLET_RADIUS:
+                    hits.append((bi, base, 'commander'))
+                    break
+    return hits
+
+
+def _simple_robot_wall_block(robots: list[Robot], bases: list[Base]):
+    """Push robots out of base walls and apply collision damage."""
+    for robot in robots:
+        if not robot.alive:
+            continue
+        for base in bases:
+            if not base.wall_alive:
+                continue
+            dx = robot.pos[0] - base.center[0]
+            dy = robot.pos[1] - base.center[1]
+            dist = math.sqrt(dx * dx + dy * dy)
+            wall_outer = base.radius + settings.BASE_WALL_THICKNESS + robot.radius
+            wall_inner = base.radius - settings.BASE_WALL_THICKNESS - robot.radius
+            if wall_inner < dist < wall_outer:
+                if dist < 0.001:
+                    continue
+                norm_x = dx / dist
+                norm_y = dy / dist
+                robot.pos[0] = base.center[0] + norm_x * wall_outer
+                robot.pos[1] = base.center[1] + norm_y * wall_outer
+                robot.take_damage(settings.COLLISION_DAMAGE)
+
+
 # --- Fitness parameter definitions ------------------------------------------
 
 FITNESS_PARAMS = [
     # (key, label, default, min_val, max_val, step)
     ('hit_enemy',     'Hit enemy',    50.0, -200.0, 200.0, 10.0),
+    ('hit_ebase',     'Hit eBase',   30.0, -200.0, 200.0, 10.0),
+    ('hit_fbase',     'Hit fBase',  -30.0, -200.0, 200.0, 10.0),
     ('hit_friend',    'Hit friend',  -30.0, -200.0, 200.0, 10.0),
     ('survival',      'Survival',      0.1,   -2.0,   2.0,  0.1),
     ('damage_taken',  'Damage taken', -5.0,  -50.0,  50.0,  5.0),
@@ -388,6 +440,15 @@ class TrainingArena:
             self.friendly_base_pos = right_base
             self.enemy_base_pos = left_base
 
+        # Create actual Base objects for wall collisions
+        self.friendly_base = Base(
+            center=self.friendly_base_pos.copy(),
+            radius=settings.BASE_RADIUS, team=0)
+        self.enemy_base = Base(
+            center=self.enemy_base_pos.copy(),
+            radius=settings.BASE_RADIUS, team=1)
+        self.bases = [self.friendly_base, self.enemy_base]
+
         # Per-slot state
         self.populations: dict[int, Population] = {}
         self.best_brains: dict[int, Brain | None] = {}
@@ -460,6 +521,11 @@ class TrainingArena:
         self.bullets = []
         self.students = []
         self.sparring = []
+
+        # Reset base walls each generation
+        for base in self.bases:
+            base.wall_hp = settings.BASE_WALL_HP
+            base.commander_alive = True
 
         slot = self.active_slot
         if slot not in self.populations:
@@ -588,6 +654,9 @@ class TrainingArena:
 
         _simple_robot_collisions(alive_all, num_students)
 
+        # Robot-wall collisions (push robots out of base walls)
+        _simple_robot_wall_block(alive_all, self.bases)
+
         # Track distances for delta-based fitness (initial and best/minimum)
         alive_enemies = [r for r in self.sparring if r.alive and r.team != 0]
         alive_friends = [r for r in self.sparring if r.alive and r.team == 0]
@@ -629,6 +698,21 @@ class TrainingArena:
 
             self.bullets[bi].alive = False
 
+        # Bullet-base collisions (training zones have real walls)
+        base_hits = _simple_bullet_base_collisions(self.bullets, self.bases)
+        for bi, base, hit_type in base_hits:
+            if not self.bullets[bi].alive:
+                continue
+            if hit_type == 'wall':
+                base.take_wall_damage(self.bullets[bi].damage)
+                # Credit nearest student for hitting a base
+                if self.bullets[bi].team == 0:
+                    if base is self.enemy_base:
+                        self._credit_hit(self.bullets[bi].pos.copy(), 'hit_ebase')
+                    else:
+                        self._credit_hit(self.bullets[bi].pos.copy(), 'hit_fbase')
+            self.bullets[bi].alive = False
+
         self.bullets = [b for b in self.bullets if b.alive]
 
         # Scanner enemy detection
@@ -658,6 +742,10 @@ class TrainingArena:
         if best_student is not None:
             if hit_type == 'hit_enemy':
                 best_student.hits_dealt += 1
+            elif hit_type == 'hit_ebase':
+                best_student.hits_ebase += 1
+            elif hit_type == 'hit_fbase':
+                best_student.hits_fbase += 1
             elif hit_type == 'hit_friend':
                 best_student.hits_friend += 1
 
@@ -681,6 +769,8 @@ class TrainingArena:
             dist_fbase = _delta_score(robot.init_dist_to_fbase, robot.best_dist_to_fbase)
             fitness = (
                 robot.hits_dealt * w.get('hit_enemy', 0)
+                + robot.hits_ebase * w.get('hit_ebase', 0)
+                + robot.hits_fbase * w.get('hit_fbase', 0)
                 + robot.hits_friend * w.get('hit_friend', 0)
                 + robot.ticks_alive * w.get('survival', 0)
                 + robot.hits_taken * w.get('damage_taken', 0)
@@ -819,6 +909,8 @@ def _zone_worker(blueprint_dicts: list[dict], config_dict: dict, conn: mp.connec
                                       float(arena.friendly_base_pos[1])),
                     'enemy_base': (float(arena.enemy_base_pos[0]),
                                    float(arena.enemy_base_pos[1])),
+                    'friendly_base_wall_hp': arena.friendly_base.wall_hp,
+                    'enemy_base_wall_hp': arena.enemy_base.wall_hp,
                 }
                 if gen_changed:
                     last_gen = arena.generation
@@ -908,6 +1000,9 @@ class TrainingZoneProxy:
             self.friendly_base_pos = right_base
             self.enemy_base_pos = left_base
 
+        self.friendly_base_wall_hp: float = settings.BASE_WALL_HP
+        self.enemy_base_wall_hp: float = settings.BASE_WALL_HP
+
         # Cached render state
         self._robots: list[_RenderRobot] = []
         self._bullets: list[_RenderBullet] = []
@@ -980,6 +1075,11 @@ class TrainingZoneProxy:
         if 'enemy_base' in snapshot:
             eb = snapshot['enemy_base']
             self.enemy_base_pos = np.array([eb[0], eb[1]], dtype=np.float32)
+
+        if 'friendly_base_wall_hp' in snapshot:
+            self.friendly_base_wall_hp = snapshot['friendly_base_wall_hp']
+        if 'enemy_base_wall_hp' in snapshot:
+            self.enemy_base_wall_hp = snapshot['enemy_base_wall_hp']
 
         if 'best_brain' in snapshot:
             bd = snapshot['best_brain']

@@ -38,7 +38,7 @@ ARENA_HEIGHT = BATTLEFIELD_HEIGHT
 
 # --- Base ---
 BASE_RADIUS = 80
-BASE_WALL_HP = 200
+BASE_WALL_HP = 600
 BASE_WALL_THICKNESS = 6
 COMMANDER_RADIUS = 6
 
@@ -66,9 +66,6 @@ BULLET_LIFETIME = 120  # ticks before despawn
 # --- Weapon ---
 WEAPON_COOLDOWN = 30  # ticks between shots
 
-# --- Turret ---
-TURRET_RANGE = 250
-TURRET_COOLDOWN = 45
 
 # --- Sensors ---
 VIEW_SENSOR_RAYS = 16       # number of rays for ViewSensor

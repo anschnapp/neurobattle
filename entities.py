@@ -1,4 +1,4 @@
-"""Game entities: robots (block-based), bullets, bases, turrets."""
+"""Game entities: robots (block-based), bullets, bases."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import numpy as np
 from dataclasses import dataclass, field
 
 from brain import Brain
-from modules import RobotBlueprint, Block, BlockType, Direction, BLOCK_PIXEL_SIZE
+from modules import RobotBlueprint, Block, BlockType, BLOCK_PIXEL_SIZE
 
 import settings
 
@@ -29,6 +29,8 @@ class Robot:
     # Fitness tracking
     hits_dealt: int = 0
     hits_friend: int = 0
+    hits_ebase: int = 0
+    hits_fbase: int = 0
     hits_taken: int = 0
     ticks_alive: int = 0
     distance_traveled: float = 0.0
@@ -197,78 +199,12 @@ class Bullet:
 
 
 @dataclass
-class Turret:
-    """A turret mounted on a base wall."""
-    base_center: np.ndarray
-    base_radius: float
-    wall_angle: float
-    team: int
-    brain: Brain | None = None
-    fire_rate: int = settings.TURRET_COOLDOWN
-    cooldown: int = 0
-    bullet_speed: float = settings.BULLET_SPEED
-    bullet_damage: float = settings.BULLET_DAMAGE
-    target_angle: float = 0.0
-    wants_to_shoot: bool = False
-
-    @property
-    def pos(self) -> np.ndarray:
-        return self.base_center + np.array([
-            math.cos(self.wall_angle) * self.base_radius,
-            math.sin(self.wall_angle) * self.base_radius,
-        ], dtype=np.float32)
-
-    def update_simple_ai(self, enemies: list[Robot]):
-        if self.cooldown > 0:
-            self.cooldown -= 1
-        if not enemies:
-            self.wants_to_shoot = False
-            return
-
-        my_pos = self.pos
-        nearest = None
-        nearest_dist = float('inf')
-        for e in enemies:
-            if not e.alive:
-                continue
-            dist = np.linalg.norm(e.pos - my_pos)
-            if dist < nearest_dist and dist < settings.TURRET_RANGE:
-                nearest = e
-                nearest_dist = dist
-
-        if nearest is not None:
-            self.target_angle = math.atan2(
-                nearest.pos[1] - my_pos[1],
-                nearest.pos[0] - my_pos[0],
-            )
-            self.wants_to_shoot = True
-        else:
-            self.wants_to_shoot = False
-
-    def try_shoot(self) -> Bullet | None:
-        if not self.wants_to_shoot or self.cooldown > 0:
-            return None
-
-        self.cooldown = self.fire_rate
-        direction = np.array([math.cos(self.target_angle),
-                              math.sin(self.target_angle)], dtype=np.float32)
-        bullet_pos = self.pos + direction * (settings.BULLET_RADIUS + 2)
-        return Bullet(
-            pos=bullet_pos,
-            velocity=direction * self.bullet_speed,
-            team=self.team,
-            damage=self.bullet_damage,
-        )
-
-
-@dataclass
 class Base:
     center: np.ndarray
     radius: float
     team: int
     wall_hp: float = settings.BASE_WALL_HP
     commander_alive: bool = True
-    turrets: list[Turret] = field(default_factory=list)
 
     @property
     def wall_alive(self) -> bool:
@@ -285,12 +221,4 @@ class Base:
     @staticmethod
     def create(team: int) -> Base:
         center = settings.BASE_POSITIONS[team].copy()
-        base = Base(center=center, radius=settings.BASE_RADIUS, team=team)
-        turret = Turret(
-            base_center=center,
-            base_radius=settings.BASE_RADIUS,
-            wall_angle=math.pi if team == 0 else 0.0,
-            team=team,
-        )
-        base.turrets.append(turret)
-        return base
+        return Base(center=center, radius=settings.BASE_RADIUS, team=team)

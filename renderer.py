@@ -6,7 +6,7 @@ import math
 import pygame
 import numpy as np
 
-from entities import Robot, Bullet, Base, Turret
+from entities import Robot, Bullet, Base
 from modules import BlockType, BLOCK_PIXEL_SIZE, Direction
 import settings
 
@@ -69,22 +69,6 @@ class Renderer:
                                settings.COMMANDER_RADIUS)
             pygame.draw.circle(self.screen, settings.WHITE, (cx, cy),
                                settings.COMMANDER_RADIUS, 1)
-
-        for turret in base.turrets:
-            self.draw_turret(turret, oy)
-
-    def draw_turret(self, turret: Turret, offset_y: int = 0):
-        pos = turret.pos
-        tx, ty = int(pos[0]), int(pos[1]) + offset_y
-        color = settings.TEAM_COLORS[turret.team]
-
-        pygame.draw.circle(self.screen, color, (tx, ty), 6)
-        pygame.draw.circle(self.screen, settings.WHITE, (tx, ty), 6, 1)
-
-        aim = turret.target_angle
-        end_x = tx + int(math.cos(aim) * 12)
-        end_y = ty + int(math.sin(aim) * 12)
-        pygame.draw.line(self.screen, settings.WHITE, (tx, ty), (end_x, end_y), 2)
 
     def _draw_robot_perception(self, robot: Robot, ox: int, oy: int, scale: float = 1.0):
         """Draw sensor cones, health bar, and speed arrow for a robot."""
@@ -472,16 +456,21 @@ class Renderer:
                                        (zone.enemy_base_pos, False)):
             bx = int(base_pos[0] * scale + ox)
             by = int(base_pos[1] * scale + oy)
-            if is_friendly:
-                base_color = tuple(c // 4 for c in settings.TEAM_COLORS[player_id])
+            wall_hp = zone.friendly_base_wall_hp if is_friendly else zone.enemy_base_wall_hp
+            wall_alive = wall_hp > 0
+            team_color = settings.TEAM_COLORS[player_id] if is_friendly else settings.TEAM_COLORS[1 - player_id]
+            if wall_alive:
+                # Brightness scales with remaining HP
+                wall_alpha = max(0.2, wall_hp / settings.BASE_WALL_HP)
+                base_color = tuple(int(c * wall_alpha * 0.5) for c in team_color)
+                pygame.draw.circle(self.screen, base_color, (bx, by),
+                                   base_r + 2, max(1, int(3 * scale)))
             else:
-                base_color = tuple(c // 4 for c in settings.TEAM_COLORS[1 - player_id])
-            # Wall circle
-            pygame.draw.circle(self.screen, base_color, (bx, by),
-                               base_r + 2, max(1, int(3 * scale)))
+                # Wall destroyed — dim outline
+                pygame.draw.circle(self.screen, (40, 40, 40), (bx, by),
+                                   base_r, max(1, int(1 * scale)))
             # Commander dot
-            cmd_color = settings.TEAM_COLORS[player_id] if is_friendly else settings.TEAM_COLORS[1 - player_id]
-            pygame.draw.circle(self.screen, cmd_color, (bx, by),
+            pygame.draw.circle(self.screen, team_color, (bx, by),
                                max(2, int(settings.COMMANDER_RADIUS * scale)))
 
         # Draw robots

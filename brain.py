@@ -1,4 +1,4 @@
-"""Neural network brain for robots and turrets."""
+"""Neural network brain for robots."""
 
 from __future__ import annotations
 

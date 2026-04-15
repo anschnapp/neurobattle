@@ -209,15 +209,6 @@ class Game:
         for robot in self.robots:
             new_bullets.extend(robot.try_shoot())
 
-        # Turret AI
-        for base in self.bases:
-            enemies = [r for r in self.robots if r.team != base.team and r.alive]
-            for turret in base.turrets:
-                turret.update_simple_ai(enemies)
-                bullet = turret.try_shoot()
-                if bullet is not None:
-                    new_bullets.append(bullet)
-
         self.bullets.extend(new_bullets)
 
         # Update positions
