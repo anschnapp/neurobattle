@@ -89,13 +89,17 @@ def _simple_sensor_readings(robots: list[Robot],
                     dx = base_pos[0] - s_pos[0]
                     dy = base_pos[1] - s_pos[1]
                     d = math.sqrt(dx * dx + dy * dy)
-                    if d >= s_range or d < 0.001:
+                    if d < 0.001:
                         continue
                     dot = (dx * s_dx + dy * s_dy) / d
                     if dot < cos_fov:
                         continue
-                    if d < best_dist:
-                        best_dist = d
+                    # Distance to nearest point on wall circle, not hidden center
+                    d_wall = max(0.0, d - settings.BASE_RADIUS)
+                    if d_wall >= s_range:
+                        continue
+                    if d_wall < best_dist:
+                        best_dist = d_wall
                         best_type = 1.0 if is_friend else -1.0
 
             readings.append(best_dist / s_range)
@@ -175,7 +179,8 @@ def _simple_sensor_readings(robots: list[Robot],
                     angle = math.atan2(dy, dx) - robot.angle
                     angle = (angle + math.pi) % (2 * math.pi) - math.pi
                     readings.append(angle / math.pi)
-                    readings.append(1.0 - min(d / arena_diag, 1.0))
+                    d_wall = max(0.0, d - settings.BASE_RADIUS)
+                    readings.append(1.0 - min(d_wall / arena_diag, 1.0))
 
         # --- Intrinsic inputs: speed, health (always present) ---
         speed = float(np.linalg.norm(robot.velocity))

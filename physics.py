@@ -258,14 +258,18 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
             # Check bases (few, so loop is fine)
             for bi, base in enumerate(bases):
                 to_base = base.center - sensor_pos
-                bd = np.linalg.norm(to_base)
-                if bd > sensor.sensor_range or bd < 0.001:
+                bd = float(np.linalg.norm(to_base))
+                if bd < 0.001:
                     continue
                 dot = np.dot(to_base / bd, sensor_dir)
                 if dot < cos_fov:
                     continue
-                if bd < best_dist:
-                    best_dist = bd
+                # Distance to nearest point on wall circle, not hidden center
+                bd_wall = max(0.0, bd - base.radius)
+                if bd_wall > sensor.sensor_range:
+                    continue
+                if bd_wall < best_dist:
+                    best_dist = bd_wall
                     best_type = 1.0 if base.team == robot.team else -1.0
 
             readings.append(best_dist / sensor.sensor_range)
@@ -328,7 +332,8 @@ def batch_sensor_readings(robots: list[Robot], bases: list[Base]) -> dict[int, n
                     angle = math.atan2(by, bx) - robot.angle
                     angle = (angle + math.pi) % (2 * math.pi) - math.pi
                     readings.append(angle / math.pi)
-                    readings.append(1.0 - min(d / arena_diag, 1.0))
+                    d_wall = max(0.0, d - base.radius)
+                    readings.append(1.0 - min(d_wall / arena_diag, 1.0))
 
         # --- Intrinsic inputs: speed, health (always present) ---
         speed = float(np.linalg.norm(robot.velocity))
