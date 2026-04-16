@@ -56,7 +56,7 @@ Robots use a **single HP pool** — no per-block damage. Every block contributes
 
 ### Collision Damage
 
-Robots take **2 HP per tick** of overlap when colliding with other robots or pressing into a base wall. Both parties take damage on robot-robot collisions. Collision damage counts toward `hits_taken` (penalized by the "Damage taken" fitness weight) but does **not** count as a hit dealt — no attacker gets credit. This creates a natural standoff distance: bots must get close enough to shoot but not so close they ram and take free damage. Prevents stacking on top of enemies or parking against the base wall.
+Robots take **2 HP per tick** of overlap when colliding with other robots, pressing into a base wall, or pressing against arena borders. Both parties take damage on robot-robot collisions. Collision damage counts toward `hits_taken` (penalized by the "Damage taken" fitness weight) but does **not** count as a hit dealt — no attacker gets credit. This creates a natural standoff distance: bots must get close enough to shoot but not so close they ram and take free damage. Border collision damage prevents bots from hugging arena edges to avoid combat.
 
 ### Fixed Orientation
 
@@ -139,7 +139,8 @@ Training is free (no resource cost). Each player has a **single training zone** 
 - Layout: config panel on the left (350px), arena viewport on the right (sized to actual rendered area).
 - Config panel is split into three columns: left column for spawn actions (spawn bot 1/2/3, destroy old), center column for training config (design selector, enemy/friend sparring type and count, resource drops, spawn distance), right column for all 10 fitness weight sliders. Player navigates with up/down within a column, left/right to switch columns, primary/secondary to adjust values.
 - **Spawn distance:** configurable as Close/Medium/Far. Controls how far apart students and enemies spawn. Close puts them within sensor range from the start — useful for early training before radar-equipped bots learn long-range navigation.
-- **Bases in training:** Each training zone contains a friendly base and an enemy base, positioned to match the player's actual game layout (Player 1: friendly left, enemy right; Player 2: friendly right, enemy left). Students spawn near their friendly base, enemies near the enemy base. **Bases have real walls** — robots are blocked by walls (with collision damage) and bullets damage the wall, just like on the battlefield. Wall HP resets each generation. This lets bots train to breach base walls. Hitting the enemy base wall earns "Hit eBase" fitness credit; hitting the friendly base wall earns "Hit fBase" fitness credit (penalized by default). Base walls dim as they take damage. Base positions feed into beacon inputs and distance fitness metrics, ensuring trained brains transfer correctly to the battlefield.
+- **Generation length:** configurable (300/600/900/1200/1800/2400 ticks, default 600). Controls how long each generation runs before evaluation. Longer generations let bots develop more complex multi-step behaviors (approach → aim → fire) but slow down evolution speed. Shorter generations force fast, reactive evolution.
+- **Bases in training:** Each training zone contains a friendly base and an enemy base, positioned to match the player's actual game layout (Player 1: friendly left, enemy right; Player 2: friendly right, enemy left). Students spawn near their friendly base, enemies near the enemy base. **Bases have real walls** — robots are blocked by walls (with collision damage) and bullets hit the wall, just like on the battlefield. **The enemy base wall is indestructible in training** — bullets register hits (earning "Hit eBase" fitness credit) but deal no damage. This forces bots to learn proper standoff distance and sustained fire instead of blasting through and wandering. The friendly base wall takes damage normally from sparring enemies. Wall HP resets each generation. Base walls dim as they take damage. Base positions feed into beacon inputs and distance fitness metrics, ensuring trained brains transfer correctly to the battlefield.
 - Arena viewport shows the simulation with stats overlay (generation, fitness, alive count).
 - Per-slot generation counts are displayed so the player can see progress on all 3 designs.
 - **Resource injection:** The player can configure how many resource drops (0-20) spawn each generation. This allows training pure gatherers without needing the full battlefield resource system — bots evolve to magnetically collect yellow drops via GATHERER blocks.
@@ -153,7 +154,7 @@ Training is free (no resource cost). Each player has a **single training zone** 
    - Own robots assigned as **friend** or **enemy** (any of the player's 3 designs)
    - Scanned enemy robots as enemies (locked to the generation that was scanned)
    - Player chooses how many sparring partners to include
-4. The round plays out until a time limit (600 ticks) or all students are dead.
+4. The round plays out until the generation time limit (configurable: 300–2400 ticks, default 600) or all students are dead.
 5. The best-performing students survive as elites. The rest are produced via crossover of two top-half parents + sparse mutation.
 6. Repeat.
 

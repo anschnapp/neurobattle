@@ -484,7 +484,7 @@ class Renderer:
         # Stats overlay in viewport
         fit_txt = f"Best:{stats['best_fitness']:.0f} Avg:{stats['avg_fitness']:.0f}"
         alive_txt = f"{stats['alive_students']}/{stats['total_students']} alive"
-        tick_txt = f"{stats['gen_tick']}/{settings.TRAINING_TICKS_PER_GENERATION}"
+        tick_txt = f"{stats['gen_tick']}/{stats.get('gen_ticks_max', 600)}"
 
         self.screen.blit(self.small_font.render(fit_txt, True, settings.GREEN),
                          (vp_x + 3, vp_y + 2))

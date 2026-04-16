@@ -214,7 +214,13 @@ class Game:
         # Update positions
         for robot in self.robots:
             robot.update()
+            px, py = robot.pos[0], robot.pos[1]
             clamp_to_arena(robot.pos, robot.radius)
+            if robot.pos[0] != px or robot.pos[1] != py:
+                robot.hp -= settings.COLLISION_DAMAGE
+                robot.hits_taken += 1
+                if robot.hp <= 0:
+                    robot.alive = False
 
         for bullet in self.bullets:
             bullet.update()

@@ -174,6 +174,7 @@ class Robot:
                 velocity=direction * block.bullet_speed,
                 team=self.team,
                 damage=block.bullet_damage,
+                owner=self,
             ))
         return bullets
 
@@ -186,6 +187,7 @@ class Bullet:
     damage: float = 10.0
     alive: bool = True
     lifetime: int = settings.BULLET_LIFETIME
+    owner: Robot | None = None
 
     @property
     def radius(self) -> float:

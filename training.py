@@ -296,6 +296,7 @@ class TrainingZoneConfig:
     friend_count: int = 0
     resource_count: int = 0   # scattered resource drops in the arena for gatherer training
     spawn_distance: int = 2   # 0=close, 1=medium, 2=far (default: far, original behavior)
+    gen_ticks: int = 600       # ticks per generation (configurable)
     fitness_weights: dict = field(default_factory=lambda: dict(DEFAULT_FITNESS_WEIGHTS))
 
     def to_dict(self) -> dict:
@@ -306,6 +307,7 @@ class TrainingZoneConfig:
             'friend_count': self.friend_count,
             'resource_count': self.resource_count,
             'spawn_distance': self.spawn_distance,
+            'gen_ticks': self.gen_ticks,
             'fitness_weights': dict(self.fitness_weights),
         }
 
@@ -318,6 +320,7 @@ class TrainingZoneConfig:
             friend_count=d['friend_count'],
             resource_count=d.get('resource_count', 0),
             spawn_distance=d.get('spawn_distance', 2),
+            gen_ticks=d.get('gen_ticks', 600),
             fitness_weights=dict(d['fitness_weights']),
         )
 
@@ -677,7 +680,14 @@ class TrainingArena:
         w, h = self.width, self.height
         for robot in alive_all:
             robot.update()
+            # Border collision damage: hurt robots pressing against arena edges
+            px, py = robot.pos[0], robot.pos[1]
             clamp_to_arena(robot.pos, robot.radius, w, h)
+            if robot.pos[0] != px or robot.pos[1] != py:
+                robot.hp -= settings.COLLISION_DAMAGE
+                robot.hits_taken += 1
+                if robot.hp <= 0:
+                    robot.alive = False
 
         _simple_robot_collisions(alive_all, num_students)
 
@@ -722,7 +732,7 @@ class TrainingArena:
             target.take_damage(self.bullets[bi].damage)
 
             if shooter_team == 0 and target.team == 1:
-                self._credit_hit(bpos, 'hit_enemy')
+                self._credit_hit(self.bullets[bi], 'hit_enemy')
 
             self.bullets[bi].alive = False
 
@@ -732,10 +742,14 @@ class TrainingArena:
             if not self.bullets[bi].alive:
                 continue
             if hit_type == 'wall':
-                base.take_wall_damage(self.bullets[bi].damage)
-                # Credit nearest student for hitting a base
+                # Enemy base is indestructible in training — students still
+                # get fitness credit but the wall stays up so they learn to
+                # keep proper distance instead of walking through.
+                if base is not self.enemy_base:
+                    base.take_wall_damage(self.bullets[bi].damage)
+                # Credit student who fired the bullet
                 if self.bullets[bi].team == 0 and base is self.enemy_base:
-                    self._credit_hit(self.bullets[bi].pos.copy(), 'hit_ebase')
+                    self._credit_hit(self.bullets[bi], 'hit_ebase')
             self.bullets[bi].alive = False
 
         self.bullets = [b for b in self.bullets if b.alive]
@@ -749,26 +763,19 @@ class TrainingArena:
             self.resources = [r for r in self.resources if r.alive]
 
         all_students_dead = not any(s.alive for s in self.students)
-        time_up = self.gen_tick >= settings.TRAINING_TICKS_PER_GENERATION
+        time_up = self.gen_tick >= self.config.gen_ticks
 
         if all_students_dead or time_up:
             self._end_generation()
 
-    def _credit_hit(self, bullet_pos: np.ndarray, hit_type: str):
-        best_student = None
-        best_dist = float('inf')
-        for s in self.students:
-            if not s.alive:
-                continue
-            d = np.linalg.norm(s.pos - bullet_pos)
-            if d < best_dist:
-                best_dist = d
-                best_student = s
-        if best_student is not None:
-            if hit_type == 'hit_enemy':
-                best_student.hits_dealt += 1
-            elif hit_type == 'hit_ebase':
-                best_student.hits_ebase += 1
+    def _credit_hit(self, bullet: Bullet, hit_type: str):
+        owner = bullet.owner
+        if owner is None or owner not in self.students:
+            return
+        if hit_type == 'hit_enemy':
+            owner.hits_dealt += 1
+        elif hit_type == 'hit_ebase':
+            owner.hits_ebase += 1
 
     def _end_generation(self):
         w = self.config.fitness_weights
@@ -827,7 +834,8 @@ class TrainingArena:
         if slot not in self.populations:
             base.update({
                 'generation': 0, 'best_fitness': 0.0, 'avg_fitness': 0.0,
-                'gen_tick': 0, 'alive_students': 0, 'total_students': 0,
+                'gen_tick': 0, 'gen_ticks_max': self.config.gen_ticks,
+                'alive_students': 0, 'total_students': 0,
                 'alive_sparring': 0,
             })
             return base
@@ -836,6 +844,7 @@ class TrainingArena:
             'best_fitness': self.last_best_fitness.get(slot, 0.0),
             'avg_fitness': self.last_avg_fitness.get(slot, 0.0),
             'gen_tick': self.gen_tick,
+            'gen_ticks_max': self.config.gen_ticks,
             'alive_students': sum(1 for s in self.students if s.alive),
             'total_students': len(self.students),
             'alive_sparring': sum(1 for s in self.sparring if s.alive),
@@ -1035,7 +1044,7 @@ class TrainingZoneProxy:
         self._resources: list[np.ndarray] = []  # list of [x, y] positions
         self._stats: dict = {
             'generation': 0, 'best_fitness': 0.0, 'avg_fitness': 0.0,
-            'gen_tick': 0, 'alive_students': 0, 'total_students': 0,
+            'gen_tick': 0, 'gen_ticks_max': 600, 'alive_students': 0, 'total_students': 0,
             'alive_sparring': 0, 'active_slot': 0, 'slot_generations': {},
         }
         self._best_brains: dict[int, dict] = {}  # slot -> brain data
@@ -1173,7 +1182,8 @@ class TrainingZoneUI:
     ROW_FRIEND_COUNT = 5
     ROW_RESOURCES = 6
     ROW_SPAWN_DIST = 7
-    NUM_CONFIG_ROWS = 8
+    ROW_GEN_TICKS = 8
+    NUM_CONFIG_ROWS = 9
 
     # Column 2: fitness rows (indexed from 0 within the column)
     NUM_FITNESS_ROWS = len(FITNESS_PARAMS)
@@ -1181,6 +1191,7 @@ class TrainingZoneUI:
     NUM_COLUMNS = 3
 
     SPAWN_DIST_LABELS = ['Close', 'Medium', 'Far']
+    GEN_TICKS_OPTIONS = [300, 600, 900, 1200, 1800, 2400]
 
     # Labels for spawn column
     SPAWN_LABELS = [
@@ -1200,6 +1211,7 @@ class TrainingZoneUI:
         'Friend count',
         'Resources',
         'Spawn dist',
+        'Gen length',
     ]
 
     # Labels for fitness column
@@ -1351,6 +1363,14 @@ class TrainingZoneUI:
                 cfg.spawn_distance = new
                 return True
 
+        elif row == self.ROW_GEN_TICKS:
+            opts = self.GEN_TICKS_OPTIONS
+            cur_idx = opts.index(cfg.gen_ticks) if cfg.gen_ticks in opts else 1
+            new_idx = max(0, min(len(opts) - 1, cur_idx + direction))
+            if opts[new_idx] != cfg.gen_ticks:
+                cfg.gen_ticks = opts[new_idx]
+                return True
+
         return False
 
     def _cycle_slot(self, attr: str, direction: int) -> bool:
@@ -1400,6 +1420,8 @@ class TrainingZoneUI:
             return str(cfg.resource_count)
         elif row == self.ROW_SPAWN_DIST:
             return self.SPAWN_DIST_LABELS[cfg.spawn_distance]
+        elif row == self.ROW_GEN_TICKS:
+            return str(cfg.gen_ticks)
         return ""
 
     def get_fitness_value_str(self, row: int) -> str:
