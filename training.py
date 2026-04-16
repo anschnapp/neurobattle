@@ -78,6 +78,26 @@ def _simple_sensor_readings(robots: list[Robot],
                     best_dist = d
                     best_type = 1.0 if other.team == robot.team else -1.0
 
+            # Also detect bases within the cone (matches battlefield sensors).
+            # friendly_base_pos is team-0's home; enemy_base_pos is team-1's home.
+            if friendly_base_pos is not None and enemy_base_pos is not None:
+                if robot.team == 0:
+                    own_base, foe_base = friendly_base_pos, enemy_base_pos
+                else:
+                    own_base, foe_base = enemy_base_pos, friendly_base_pos
+                for base_pos, is_friend in ((own_base, True), (foe_base, False)):
+                    dx = base_pos[0] - s_pos[0]
+                    dy = base_pos[1] - s_pos[1]
+                    d = math.sqrt(dx * dx + dy * dy)
+                    if d >= s_range or d < 0.001:
+                        continue
+                    dot = (dx * s_dx + dy * s_dy) / d
+                    if dot < cos_fov:
+                        continue
+                    if d < best_dist:
+                        best_dist = d
+                        best_type = 1.0 if is_friend else -1.0
+
             readings.append(best_dist / s_range)
             readings.append(best_type)
 
@@ -285,6 +305,17 @@ FITNESS_PARAMS = [
 DEFAULT_FITNESS_WEIGHTS = {p[0]: p[2] for p in FITNESS_PARAMS}
 
 
+# Mutation strength presets: (sigma, fraction_of_weights_mutated)
+# Low: fine-tuning. Medium: default. High/Extreme: break out of local optima.
+MUTATION_LEVELS = [
+    (0.05, 0.10),  # 0 = Low
+    (0.10, 0.20),  # 1 = Medium
+    (0.20, 0.35),  # 2 = High
+    (0.40, 0.50),  # 3 = Extreme
+]
+MUTATION_LABELS = ['Low', 'Medium', 'High', 'Extreme']
+
+
 # --- Training zone config ---------------------------------------------------
 
 @dataclass
@@ -297,6 +328,7 @@ class TrainingZoneConfig:
     resource_count: int = 0   # scattered resource drops in the arena for gatherer training
     spawn_distance: int = 2   # 0=close, 1=medium, 2=far (default: far, original behavior)
     gen_ticks: int = 600       # ticks per generation (configurable)
+    mutation_strength: int = 1 # 0=Low, 1=Medium, 2=High, 3=Extreme
     fitness_weights: dict = field(default_factory=lambda: dict(DEFAULT_FITNESS_WEIGHTS))
 
     def to_dict(self) -> dict:
@@ -308,6 +340,7 @@ class TrainingZoneConfig:
             'resource_count': self.resource_count,
             'spawn_distance': self.spawn_distance,
             'gen_ticks': self.gen_ticks,
+            'mutation_strength': self.mutation_strength,
             'fitness_weights': dict(self.fitness_weights),
         }
 
@@ -321,6 +354,7 @@ class TrainingZoneConfig:
             resource_count=d.get('resource_count', 0),
             spawn_distance=d.get('spawn_distance', 2),
             gen_ticks=d.get('gen_ticks', 600),
+            mutation_strength=d.get('mutation_strength', 1),
             fitness_weights=dict(d['fitness_weights']),
         )
 
@@ -770,7 +804,7 @@ class TrainingArena:
 
     def _credit_hit(self, bullet: Bullet, hit_type: str):
         owner = bullet.owner
-        if owner is None or owner not in self.students:
+        if owner is None or not any(s is owner for s in self.students):
             return
         if hit_type == 'hit_enemy':
             owner.hits_dealt += 1
@@ -812,6 +846,12 @@ class TrainingArena:
         self.last_best_fitness[slot] = float(np.max(self.population.fitness))
         self.last_avg_fitness[slot] = float(np.mean(self.population.fitness))
         self.best_brains[slot] = self.population.get_best()
+
+        # Apply current mutation strength config before evolving
+        lvl = max(0, min(len(MUTATION_LEVELS) - 1, self.config.mutation_strength))
+        sigma, fraction = MUTATION_LEVELS[lvl]
+        self.population.mutation_rate = sigma
+        self.population.mutation_fraction = fraction
 
         self.population.evolve()
         self._start_generation()
@@ -1183,7 +1223,8 @@ class TrainingZoneUI:
     ROW_RESOURCES = 6
     ROW_SPAWN_DIST = 7
     ROW_GEN_TICKS = 8
-    NUM_CONFIG_ROWS = 9
+    ROW_MUTATION = 9
+    NUM_CONFIG_ROWS = 10
 
     # Column 2: fitness rows (indexed from 0 within the column)
     NUM_FITNESS_ROWS = len(FITNESS_PARAMS)
@@ -1212,6 +1253,7 @@ class TrainingZoneUI:
         'Resources',
         'Spawn dist',
         'Gen length',
+        'Mutation',
     ]
 
     # Labels for fitness column
@@ -1371,6 +1413,12 @@ class TrainingZoneUI:
                 cfg.gen_ticks = opts[new_idx]
                 return True
 
+        elif row == self.ROW_MUTATION:
+            new = max(0, min(len(MUTATION_LEVELS) - 1, cfg.mutation_strength + direction))
+            if new != cfg.mutation_strength:
+                cfg.mutation_strength = new
+                return True
+
         return False
 
     def _cycle_slot(self, attr: str, direction: int) -> bool:
@@ -1422,6 +1470,8 @@ class TrainingZoneUI:
             return self.SPAWN_DIST_LABELS[cfg.spawn_distance]
         elif row == self.ROW_GEN_TICKS:
             return str(cfg.gen_ticks)
+        elif row == self.ROW_MUTATION:
+            return MUTATION_LABELS[cfg.mutation_strength]
         return ""
 
     def get_fitness_value_str(self, row: int) -> str:

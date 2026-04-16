@@ -76,7 +76,7 @@ POINT_SENSOR_RANGE = 150.0  # detection range for PointSensor
 DEFAULT_HIDDEN_SIZE = 16
 
 # --- Evolution ---
-POPULATION_SIZE = 20
+POPULATION_SIZE = 21
 ELITE_COUNT = 3
 MUTATION_RATE = 0.1
 
