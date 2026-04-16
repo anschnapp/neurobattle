@@ -115,9 +115,9 @@ class Robot:
         if speed > max_speed:
             self.velocity *= max_speed / speed
 
-        # Update facing angle based on velocity
-        if speed > 0.1:
-            self.angle = math.atan2(self.velocity[1], self.velocity[0])
+        # Body does NOT rotate with velocity — assembly layout stays fixed.
+        # Engines always push in their assembly directions, weapons always
+        # fire in their assembly directions.
 
         # Weapon outputs: iterate ALL weapon blocks to keep output index stable.
         self._weapon_signals = []

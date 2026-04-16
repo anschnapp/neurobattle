@@ -272,8 +272,6 @@ FITNESS_PARAMS = [
     # (key, label, default, min_val, max_val, step)
     ('hit_enemy',     'Hit enemy',    50.0, -200.0, 200.0, 10.0),
     ('hit_ebase',     'Hit eBase',   30.0, -200.0, 200.0, 10.0),
-    ('hit_fbase',     'Hit fBase',  -30.0, -200.0, 200.0, 10.0),
-    ('hit_friend',    'Hit friend',  -30.0, -200.0, 200.0, 10.0),
     ('survival',      'Survival',      0.1,   -2.0,   2.0,  0.1),
     ('damage_taken',  'Damage taken', -5.0,  -50.0,  50.0,  5.0),
     ('dist_to_enemy', 'Dist to enemy', 0.0,  -10.0,  10.0,  1.0),
@@ -425,18 +423,14 @@ class TrainingArena:
         self.width = settings.TRAINING_ZONE_SIM_WIDTH
         self.height = settings.TRAINING_ZONE_SIM_HEIGHT
 
-        # Base positions matching the battlefield layout for this player
+        # Both players train with the same orientation: friendly base LEFT,
+        # enemy base RIGHT. This matches the assembly layout where RIGHT =
+        # toward enemy. Students always face right (angle=0).
         cy = self.height * 0.5
-        left_base = np.array([float(settings.BASE_POSITIONS[0][0]), cy],
-                             dtype=np.float32)
-        right_base = np.array([float(settings.BASE_POSITIONS[1][0]), cy],
-                              dtype=np.float32)
-        if player_id == 0:
-            self.friendly_base_pos = left_base
-            self.enemy_base_pos = right_base
-        else:
-            self.friendly_base_pos = right_base
-            self.enemy_base_pos = left_base
+        self.friendly_base_pos = np.array(
+            [float(settings.BASE_POSITIONS[0][0]), cy], dtype=np.float32)
+        self.enemy_base_pos = np.array(
+            [float(settings.BASE_POSITIONS[1][0]), cy], dtype=np.float32)
 
         # Create actual Base objects for wall collisions
         self.friendly_base = Base(
@@ -533,14 +527,20 @@ class TrainingArena:
         pop = self.population
         n_students = min(settings.TRAINING_STUDENT_COUNT, pop.size)
 
-        # Facing angles: students face toward enemy base, enemies face toward friendly base
-        student_angle = 0.0 if self.player_id == 0 else math.pi
-        enemy_angle = math.pi if self.player_id == 0 else 0.0
+        # Both players train with the same orientation: students face right
+        # (angle=0), enemies face left (angle=π). This matches the assembly
+        # layout where RIGHT = toward enemy. The battlefield handles the
+        # per-team flip separately.
+        student_angle = 0.0
+        enemy_angle = math.pi
 
-        # Spawn students (random facing to force sensor-driven navigation)
+        # Spawn all students at the same fixed point with the same facing.
+        # Identical starting conditions = identical initial inputs = the GA
+        # can isolate brain quality from spawn luck.
+        student_pos = self._fixed_spawn_pos(team=0)
         for i in range(n_students):
-            pos = self._random_spawn_pos(team=0)
-            angle = np.random.uniform(-math.pi, math.pi)
+            pos = student_pos.copy()
+            angle = student_angle
             robot = Robot(
                 pos=pos, angle=angle, team=0,
                 blueprint=bp,
@@ -601,6 +601,23 @@ class TrainingArena:
             return scanned.copy()
         return Brain(bp.brain_input_size, bp.hidden_size, bp.brain_output_size)
 
+    def _fixed_spawn_pos(self, team: int) -> np.ndarray:
+        """Fixed spawn point for students — same position every generation."""
+        sd = self.config.spawn_distance
+        if sd == 0:
+            frac = 0.375   # close
+        elif sd == 1:
+            frac = 0.275   # medium
+        else:
+            frac = 0.22    # far
+        # Both players: team 0 (students) on left, team 1 (enemies) on right
+        if team == 0:
+            x = self.width * frac
+        else:
+            x = self.width * (1.0 - frac)
+        y = self.height / 2.0
+        return np.array([x, y], dtype=np.float32)
+
     def _random_spawn_pos(self, team: int) -> np.ndarray:
         margin = 30.0
         # spawn_distance: 0=close, 1=medium, 2=far
@@ -617,10 +634,7 @@ class TrainingArena:
         else:          # far (original)
             friendly_lo, friendly_hi = 0.04, 0.4
             enemy_lo, enemy_hi = 0.6, 0.96
-        # Flip sides for player 1
-        if self.player_id == 1:
-            friendly_lo, friendly_hi, enemy_lo, enemy_hi = \
-                1.0 - friendly_hi, 1.0 - friendly_lo, 1.0 - enemy_hi, 1.0 - enemy_lo
+        # Both players use same orientation: friendly=left, enemy=right
         if team == 0:
             x = np.random.uniform(self.width * friendly_lo + margin, self.width * friendly_hi)
         else:
@@ -655,6 +669,10 @@ class TrainingArena:
         for robot in alive_all:
             new_bullets.extend(robot.try_shoot())
         self.bullets.extend(new_bullets)
+
+        # Update bullet positions (move + lifetime)
+        for b in self.bullets:
+            b.update()
 
         w, h = self.width, self.height
         for robot in alive_all:
@@ -698,12 +716,13 @@ class TrainingArena:
         hits = _simple_bullet_collisions(self.bullets, alive_all)
         for bi, target, bpos in hits:
             shooter_team = self.bullets[bi].team
+            # No friendly fire in training — skip same-team hits entirely
+            if shooter_team == target.team:
+                continue
             target.take_damage(self.bullets[bi].damage)
 
             if shooter_team == 0 and target.team == 1:
                 self._credit_hit(bpos, 'hit_enemy')
-            elif shooter_team == 0 and target.team == 0:
-                self._credit_hit(bpos, 'hit_friend')
 
             self.bullets[bi].alive = False
 
@@ -715,11 +734,8 @@ class TrainingArena:
             if hit_type == 'wall':
                 base.take_wall_damage(self.bullets[bi].damage)
                 # Credit nearest student for hitting a base
-                if self.bullets[bi].team == 0:
-                    if base is self.enemy_base:
-                        self._credit_hit(self.bullets[bi].pos.copy(), 'hit_ebase')
-                    else:
-                        self._credit_hit(self.bullets[bi].pos.copy(), 'hit_fbase')
+                if self.bullets[bi].team == 0 and base is self.enemy_base:
+                    self._credit_hit(self.bullets[bi].pos.copy(), 'hit_ebase')
             self.bullets[bi].alive = False
 
         self.bullets = [b for b in self.bullets if b.alive]
@@ -753,10 +769,6 @@ class TrainingArena:
                 best_student.hits_dealt += 1
             elif hit_type == 'hit_ebase':
                 best_student.hits_ebase += 1
-            elif hit_type == 'hit_fbase':
-                best_student.hits_fbase += 1
-            elif hit_type == 'hit_friend':
-                best_student.hits_friend += 1
 
     def _end_generation(self):
         w = self.config.fitness_weights
@@ -779,8 +791,6 @@ class TrainingArena:
             fitness = (
                 robot.hits_dealt * w.get('hit_enemy', 0)
                 + robot.hits_ebase * w.get('hit_ebase', 0)
-                + robot.hits_fbase * w.get('hit_fbase', 0)
-                + robot.hits_friend * w.get('hit_friend', 0)
                 + robot.ticks_alive * w.get('survival', 0)
                 + robot.hits_taken * w.get('damage_taken', 0)
                 + dist_enemy * w.get('dist_to_enemy', 0)
@@ -851,7 +861,7 @@ def _pack_robots(arena: TrainingArena) -> list[tuple]:
 
 
 def _pack_bullets(arena: TrainingArena) -> list[tuple]:
-    return [(b.pos[0], b.pos[1], b.team) for b in arena.bullets if b.alive]
+    return [(b.pos[0], b.pos[1], b.velocity[0], b.velocity[1], b.team) for b in arena.bullets if b.alive]
 
 
 def _pack_resources(arena: TrainingArena) -> list[tuple]:
@@ -989,6 +999,7 @@ class _RenderRobot:
 @dataclass
 class _RenderBullet:
     pos: np.ndarray
+    velocity: np.ndarray
     team: int
     alive: bool = True
 
@@ -1008,18 +1019,12 @@ class TrainingZoneProxy:
         self.height = settings.TRAINING_ZONE_SIM_HEIGHT
         self._conn = conn
 
-        # Base positions (initialized to match player side, updated from snapshots)
+        # Both players train with same orientation: friendly=left, enemy=right
         cy = self.height * 0.5
-        left_base = np.array([float(settings.BASE_POSITIONS[0][0]), cy],
-                             dtype=np.float32)
-        right_base = np.array([float(settings.BASE_POSITIONS[1][0]), cy],
-                              dtype=np.float32)
-        if player_id == 0:
-            self.friendly_base_pos = left_base
-            self.enemy_base_pos = right_base
-        else:
-            self.friendly_base_pos = right_base
-            self.enemy_base_pos = left_base
+        self.friendly_base_pos = np.array(
+            [float(settings.BASE_POSITIONS[0][0]), cy], dtype=np.float32)
+        self.enemy_base_pos = np.array(
+            [float(settings.BASE_POSITIONS[1][0]), cy], dtype=np.float32)
 
         self.friendly_base_wall_hp: float = settings.BASE_WALL_HP
         self.enemy_base_wall_hp: float = settings.BASE_WALL_HP
@@ -1127,9 +1132,10 @@ class TrainingZoneProxy:
             ))
 
         self._bullets = []
-        for (x, y, team) in snapshot['bullets']:
+        for (x, y, vx, vy, team) in snapshot['bullets']:
             self._bullets.append(_RenderBullet(
                 pos=np.array([x, y], dtype=np.float32),
+                velocity=np.array([vx, vy], dtype=np.float32),
                 team=team,
             ))
 

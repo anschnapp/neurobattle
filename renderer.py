@@ -464,7 +464,7 @@ class Renderer:
         # Draw robots
         self._draw_zone_robots(zone, player_id, ox, oy, scale)
 
-        # Draw bullets
+        # Draw bullets — enlarged for visibility at training zoom
         for bullet in zone.bullets:
             if not bullet.alive:
                 continue
@@ -472,7 +472,8 @@ class Renderer:
             by = int(bullet.pos[1] * scale + oy)
             color = settings.TEAM_COLORS[bullet.team]
             bright = tuple(min(255, c + 80) for c in color)
-            pygame.draw.circle(self.screen, bright, (bx, by), max(1, int(2 * scale)))
+            r = max(2, int(4 * scale))
+            pygame.draw.circle(self.screen, bright, (bx, by), r)
 
         # Draw resource drops
         for res_pos in zone.resources:
